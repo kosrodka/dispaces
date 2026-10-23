@@ -39,12 +39,12 @@ The keyboard-shortcut method has one more advantage: the app can **read** your s
 | Swift 6 toolchain (Swift 5 language mode), AppKit, Foundation, CoreGraphics, ServiceManagement | All Apple system frameworks. No third-party code, so nothing to vet but our own. |
 | Swift Package Manager, no `.xcodeproj` | A `Package.swift` is 30 readable lines; an Xcode project file is thousands of opaque lines. Builds the same on CI and on any Mac with `swift build`. |
 | One tiny C target for the private, read-only function declarations | Correct C calling convention and CoreFoundation ownership rules (`CF_RETURNS_RETAINED`) instead of Swift `@_silgen_name` hacks. If Apple removes a symbol, the build fails loudly on CI instead of crashing on your Mac. |
-| `scripts/bundle.sh` wraps the binary into `SpacesBar.app` | Writes Info.plist, signs with hardened runtime. About 60 lines of readable shell. |
+| `scripts/bundle.sh` wraps the binary into `Dispaces.app` | Writes Info.plist, signs with hardened runtime. About 60 lines of readable shell. |
 
 ## 2.2 Architecture
 
 ```
-┌───────────────────────────── SpacesBar.app (one process, no network) ────────────────────────────┐
+┌───────────────────────────── Dispaces.app (one process, no network) ────────────────────────────┐
 │                                                                                                   │
 │  AppKit layer (target: SpacesBar)                         Pure logic (target: SpacesCore)         │
 │                                                                                                   │

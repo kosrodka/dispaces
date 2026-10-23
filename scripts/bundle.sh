@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds SpacesBar.app from the Swift package and signs it with the hardened runtime.
+# Builds Dispaces.app from the Swift package and signs it with the hardened runtime.
 #
 # Usage: scripts/bundle.sh [version]
 #   SIGN_IDENTITY  code-signing identity (default "-" = ad-hoc). Use a stable
@@ -23,10 +23,11 @@ for arch in $ARCHS; do ARCH_FLAGS+=(--arch "$arch"); done
 swift build -c release "${ARCH_FLAGS[@]}"
 BIN_DIR="$(swift build -c release "${ARCH_FLAGS[@]}" --show-bin-path)"
 
-APP="build/SpacesBar.app"
+APP="build/Dispaces.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN_DIR/SpacesBar" "$APP/Contents/MacOS/SpacesBar"
+# The SwiftPM target is still called SpacesBar; the app and its process are Dispaces.
+cp "$BIN_DIR/SpacesBar" "$APP/Contents/MacOS/Dispaces"
 # App icon: PNGs rendered from Assets/AppIcon.svg.
 iconutil -c icns Assets/AppIcon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
 
@@ -37,7 +38,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <dict>
   <key>CFBundleDevelopmentRegion</key><string>en</string>
   <key>CFBundleDisplayName</key><string>Dispaces</string>
-  <key>CFBundleExecutable</key><string>SpacesBar</string>
+  <key>CFBundleExecutable</key><string>Dispaces</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
@@ -58,6 +59,6 @@ plutil -lint "$APP/Contents/Info.plist"
 codesign --force --options runtime --timestamp=none --identifier "$BUNDLE_ID" --sign "$SIGN_IDENTITY" "$APP"
 codesign --verify --strict --verbose=2 "$APP"
 
-(cd build && rm -f SpacesBar.zip && ditto -c -k --keepParent SpacesBar.app SpacesBar.zip)
-shasum -a 256 build/SpacesBar.zip | tee build/SpacesBar.zip.sha256
+(cd build && rm -f Dispaces.zip && ditto -c -k --keepParent Dispaces.app Dispaces.zip)
+shasum -a 256 build/Dispaces.zip | tee build/Dispaces.zip.sha256
 echo "Built $APP ($VERSION)"

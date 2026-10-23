@@ -16,8 +16,8 @@ git log -1 --format='%H %s' &&
 swift test &&
 scripts/bundle.sh 0.1.0 &&
 scripts/security-check.sh &&
-cp -R build/SpacesBar.app /Applications/ &&
-open /Applications/SpacesBar.app
+cp -R build/Dispaces.app /Applications/ &&
+open /Applications/Dispaces.app
 ```
 
 What to look for: `git log` prints the commit you are building; `swift test` ends with all tests passed; every `security-check.sh` line says PASS.
@@ -27,21 +27,21 @@ Already cloned? Run `cd dispaces && git pull` and then the same block from `git 
 ### Option B: download a CI build
 
 1. GitHub › [kosrodka/dispaces](https://github.com/kosrodka/dispaces) › Releases (or Actions › latest green run › Artifacts).
-2. Download `SpacesBar.zip`, then check the hash matches the one on the release page / in the CI log:
+2. Download `Dispaces.zip`, then check the hash matches the one on the release page / in the CI log:
    ```sh
-   shasum -a 256 ~/Downloads/SpacesBar.zip
+   shasum -a 256 ~/Downloads/Dispaces.zip
    ```
-3. Unzip, move `SpacesBar.app` to /Applications.
+3. Unzip, move `Dispaces.app` to /Applications.
 4. The app is not notarised (no Apple developer account), so remove the download quarantine for this one app:
    ```sh
-   xattr -dr com.apple.quarantine /Applications/SpacesBar.app
-   open /Applications/SpacesBar.app
+   xattr -dr com.apple.quarantine /Applications/Dispaces.app
+   open /Applications/Dispaces.app
    ```
 
 ## 6.2 First-run setup (once)
 
 1. **Turn on the Space shortcuts:** System Settings › Keyboard › Keyboard Shortcuts… › Mission Control › tick **Switch to Desktop 1** … up to your number of desktops (macOS shows entries only for desktops that exist). Leave the default keys (Control-1, Control-2, …) or pick your own; the app reads whatever you set. Also keep **Move left a space / Move right a space** ticked (used for full-screen Spaces).
-2. **Click any tile.** macOS asks for **Accessibility** access for SpacesBar. Allow it (System Settings › Privacy & Security › Accessibility). Click the tile again.
+2. **Click any tile.** macOS asks for **Accessibility** access for Dispaces. Allow it (System Settings › Privacy & Security › Accessibility). Click the tile again.
 3. **Name things:** double-click a tile (or right-click › Rename Space…). Right-click a display name › Rename display….
 4. **Place the bars:** each display has its own bar; drag it by its background or display name, and drag its edges to resize it. Click its padlock when you're happy (menu bar icon › Lock all bars locks every bar).
 5. **Optional:** menu bar icon › Launch at login.
@@ -69,7 +69,15 @@ Check everything at once: menu bar icon › **Setup check…**. All four lines s
 
 1. Quit the old app (menu bar icon › Quit).
 2. Pull or download the new version and repeat §6.1.
-3. **Accessibility after an update:** macOS ties the permission to the app's signature, and each ad-hoc signed build has a new one. If clicks stop switching after an update: System Settings › Privacy & Security › Accessibility › select SpacesBar › **−**, then click a tile and allow it again. (To avoid this, sign with your own stable certificate: create a "Code Signing" certificate in Keychain Access › Certificate Assistant, then `SIGN_IDENTITY="Your Cert Name" scripts/bundle.sh 0.1.1`.)
+3. **Accessibility after an update:** macOS ties the permission to the app's signature, and each ad-hoc signed build has a new one. If clicks stop switching after an update: System Settings › Privacy & Security › Accessibility › select Dispaces (or the old SpacesBar entry) › **−**, then click a tile and allow it again. (To avoid this, sign with your own stable certificate: create a "Code Signing" certificate in Keychain Access › Certificate Assistant, then `SIGN_IDENTITY="Your Cert Name" scripts/bundle.sh 0.1.1`.)
+
+### Moving from SpacesBar.app (builds before 23 Oct 2026)
+
+The app used to install as `/Applications/SpacesBar.app` (process `SpacesBar`). Names, bar positions and every other setting carry over, since the bundle ID is unchanged. After installing `Dispaces.app`:
+
+1. Quit and remove the old copy: `pkill -x SpacesBar` then drag `/Applications/SpacesBar.app` to the Bin (or `rm -rf /Applications/SpacesBar.app`).
+2. Accessibility: System Settings › Privacy & Security › Accessibility › select the old **SpacesBar** entry › **−**. Click a Dispaces tile and allow it.
+3. If you used Launch at login, tick it again in the menu bar icon's menu.
 
 ## 6.5 Troubleshooting
 
@@ -95,9 +103,9 @@ defaults import io.github.kosrodka.SpacesBar ~/dispaces-backup.plist
 ## 6.7 Uninstall (leaves nothing behind)
 
 1. Menu bar icon › untick Launch at login › Quit.
-2. `rm -rf /Applications/SpacesBar.app`
+2. `rm -rf /Applications/Dispaces.app`
 3. `defaults delete io.github.kosrodka.SpacesBar`
-4. System Settings › Privacy & Security › Accessibility › remove SpacesBar.
+4. System Settings › Privacy & Security › Accessibility › remove Dispaces.
 5. Optionally turn the Switch to Desktop shortcuts back off.
 
 ## 6.8 Pen tests on your Mac (P1–P15 from docs/04-security.md)
@@ -105,7 +113,7 @@ defaults import io.github.kosrodka.SpacesBar ~/dispaces-backup.plist
 Run with the app installed and running. Record results in `docs/07-pen-test-report.md`.
 
 ```sh
-APP=/Applications/SpacesBar.app; PID=$(pgrep -x SpacesBar)
+APP=/Applications/Dispaces.app; PID=$(pgrep -x Dispaces)
 ```
 
 P1 no network: expect no output from lsof, no rows with traffic in nettop:
@@ -115,7 +123,7 @@ lsof -nP -i -a -p "$PID"; nettop -p "$PID" -l 1 -x
 
 P2 integrity: hash must match the release page / CI log:
 ```sh
-shasum -a 256 ~/Downloads/SpacesBar.zip
+shasum -a 256 ~/Downloads/Dispaces.zip
 ```
 
 P3 signature: expect flags=0x10000(runtime) and no entitlements:
@@ -129,8 +137,8 @@ P4 injection: build a dummy dylib that logs if loaded; expect no "INJECTED":
 ```sh
 printf '#include <stdio.h>\n__attribute__((constructor)) static void x(void){fprintf(stderr,"INJECTED\\n");}\n' > /tmp/inj.c
 clang -dynamiclib /tmp/inj.c -o /tmp/inj.dylib
-osascript -e 'quit app "SpacesBar"' 2>/dev/null; pkill -x SpacesBar
-DYLD_INSERT_LIBRARIES=/tmp/inj.dylib "$APP/Contents/MacOS/SpacesBar" & sleep 3; pkill -x SpacesBar
+osascript -e 'quit app "Dispaces"' 2>/dev/null; pkill -x Dispaces
+DYLD_INSERT_LIBRARIES=/tmp/inj.dylib "$APP/Contents/MacOS/Dispaces" & sleep 3; pkill -x Dispaces
 open "$APP"
 ```
 
@@ -141,12 +149,12 @@ printf 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nabc‮exe.txt\n%%@%%n%
 
 P6 corrupt preferences: expect the app to start with default names, no crash:
 ```sh
-pkill -x SpacesBar
+pkill -x Dispaces
 defaults export io.github.kosrodka.SpacesBar /tmp/sb-backup.plist
 defaults write io.github.kosrodka.SpacesBar spaceNames -string garbage
 defaults write io.github.kosrodka.SpacesBar barOffsets -string nope
-open "$APP"; sleep 3; pgrep -x SpacesBar && echo "still running: PASS"
-pkill -x SpacesBar; defaults import io.github.kosrodka.SpacesBar /tmp/sb-backup.plist; open "$APP"
+open "$APP"; sleep 3; pgrep -x Dispaces && echo "still running: PASS"
+pkill -x Dispaces; defaults import io.github.kosrodka.SpacesBar /tmp/sb-backup.plist; open "$APP"
 ```
 
 P12 login items: after enabling then disabling Launch at login:
@@ -156,7 +164,7 @@ sfltool dumpbtm 2>/dev/null | grep -i -A3 spacesbar
 
 Manual ones:
 - **P7 keystroke scope:** open TextEdit with an empty document, click tiles quickly 20 times. Expect: Spaces switch, no characters appear in TextEdit.
-- **P8 permission revoked:** remove SpacesBar from Accessibility while it runs, click a tile. Expect: message, amber !, no crash.
+- **P8 permission revoked:** remove Dispaces from Accessibility while it runs, click a tile. Expect: message, amber !, no crash.
 - **P9 shortcut off:** untick "Switch to Desktop 3", click tile 3. Expect: message naming "Switch to Desktop 3"; re-tick afterwards.
 - **P10 hot-plug, sleep:** unplug/replug the external display; sleep and wake. Expect: correct areas within a second, names kept.
 - **P11 data loss:** note window counts per app (Window menu) before and after 5 minutes of switching. Expect: identical.
