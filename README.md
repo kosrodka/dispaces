@@ -8,7 +8,7 @@ Manage macOS Spaces (Desktops): a small floating bar for macOS 26 and 27 that sh
 
 - No network access, no third-party code, no auto-update.
 - Needs one permission: Accessibility (to press your own "Switch to Desktop N" shortcuts).
-- The built app is called `SpacesBar.app` (bundle ID `io.github.kosrodka.SpacesBar`).
+- The built app is called `Dispaces.app` (bundle ID `io.github.kosrodka.SpacesBar`, kept from its old name SpacesBar so settings carry over).
 
 | Doc | |
 |---|---|
@@ -24,7 +24,7 @@ Manage macOS Spaces (Desktops): a small floating bar for macOS 26 and 27 that sh
 Quick build (macOS 26+, Xcode 26):
 ```sh
 swift test && scripts/bundle.sh 0.1.0 && scripts/security-check.sh
-cp -R build/SpacesBar.app /Applications/ && open /Applications/SpacesBar.app
+cp -R build/Dispaces.app /Applications/ && open /Applications/Dispaces.app
 ```
 
 Full install steps, including downloading a release instead of building: [Operations §6.1](docs/06-operations.md).

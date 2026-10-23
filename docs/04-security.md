@@ -72,10 +72,10 @@ Manual (on a real Mac with macOS 26 or 27; about 20 minutes; exact commands in `
 
 | ID | Test | Pass when |
 |---|---|---|
-| P1 | **No network:** run the app, switch Spaces a few times, then `lsof -i -a -p $(pgrep -x SpacesBar)` and `nettop -p $(pgrep -x SpacesBar) -l 1` | No sockets listed, no traffic |
-| P2 | **Integrity:** compare `shasum -a 256 SpacesBar.zip` to the release page and CI log (or build from source) | Hashes match |
+| P1 | **No network:** run the app, switch Spaces a few times, then `lsof -i -a -p $(pgrep -x Dispaces)` and `nettop -p $(pgrep -x Dispaces) -l 1` | No sockets listed, no traffic |
+| P2 | **Integrity:** compare `shasum -a 256 Dispaces.zip` to the release page and CI log (or build from source) | Hashes match |
 | P3 | **Signature and hardening:** `codesign -dv --verbose=4` and `codesign -d --entitlements -` on the app | `flags=0x10000(runtime)`, no entitlements |
-| P4 | **Library injection:** `DYLD_INSERT_LIBRARIES=/tmp/x.dylib /Applications/SpacesBar.app/Contents/MacOS/SpacesBar` | Library is ignored (hardened runtime strips DYLD vars) |
+| P4 | **Library injection:** `DYLD_INSERT_LIBRARIES=/tmp/x.dylib /Applications/Dispaces.app/Contents/MacOS/Dispaces` | Library is ignored (hardened runtime strips DYLD vars) |
 | P5 | **Hostile names:** rename a Space to 200 characters, to text containing U+202E, to `%@%n%s`, to emoji/combining characters | Stored ≤ 24 characters, overrides removed, displayed literally, no crash |
 | P6 | **Corrupt preferences:** `defaults write io.github.kosrodka.SpacesBar spaceNames -string garbage`, also an array of 10,000 items, then relaunch | App starts with defaults, no crash |
 | P7 | **Keystroke scope:** with TextEdit focused, click tiles quickly 20 times | Only Space switches happen; no characters typed into TextEdit |

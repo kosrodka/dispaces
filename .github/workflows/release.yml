@@ -40,20 +40,20 @@ jobs:
       - run: scripts/source-check.sh
       - run: swift test --parallel
       - run: scripts/bundle.sh "${{ steps.v.outputs.version }}"
-      - run: scripts/security-check.sh build/SpacesBar.app
+      - run: scripts/security-check.sh build/Dispaces.app
 
       # Artifact attestations need a public repo (or GitHub Enterprise Cloud).
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         if: ${{ !github.event.repository.private }}
         with:
-          subject-path: build/SpacesBar.zip
+          subject-path: build/Dispaces.zip
 
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: v${{ steps.v.outputs.version }}
         run: |
-          sha="$(cut -d' ' -f1 build/SpacesBar.zip.sha256)"
-          gh release create "$TAG" build/SpacesBar.zip build/SpacesBar.zip.sha256 \
+          sha="$(cut -d' ' -f1 build/Dispaces.zip.sha256)"
+          gh release create "$TAG" build/Dispaces.zip build/Dispaces.zip.sha256 \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Dispaces $TAG" \
             --notes "Ad-hoc signed, hardened runtime, no entitlements. SHA-256: \`$sha\`. Built from commit $GITHUB_SHA by run $GITHUB_RUN_ID. Install steps: docs/06-operations.md."

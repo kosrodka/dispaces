@@ -1,6 +1,6 @@
 # Dispaces
 
-The app's visible name is Dispaces. The bundle ID `io.github.kosrodka.SpacesBar`, the `SpacesBar` target and executable and `SpacesBar.app` keep the name SpacesBar so preferences, Space names and the Accessibility grant stay valid; don't rename them.
+The app is Dispaces: `Dispaces.app`, executable and process `Dispaces` (renamed 23 Oct 2026). The bundle ID `io.github.kosrodka.SpacesBar` (also the preferences domain and log subsystem) and the SwiftPM `SpacesBar` target keep the old name so preferences and Space names survive; don't rename them.
 
 A small macOS menu-bar app that shows every Space per display in a floating bar and switches Space on click. Owner: Kamil Ośródka (kosrodka).
 
@@ -35,7 +35,7 @@ macOS 26+ with Xcode 26:
 ```sh
 swift test
 scripts/bundle.sh 0.1.0
-scripts/security-check.sh build/SpacesBar.app
+scripts/security-check.sh build/Dispaces.app
 ```
 Cloud sessions can't compile macOS code: push a branch and read the CI run (`.github/workflows/ci.yml`) instead. CI is the source of truth for "it builds".
 
