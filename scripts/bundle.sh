@@ -48,7 +48,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>26.0</string>
   <key>LSUIElement</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
-  <key>NSHumanReadableCopyright</key><string>Copyright 2026 Kamil Ośródka. MIT License.</string>
+  <key>NSHumanReadableCopyright</key><string>Copyright 2026 Kamil Ośródka (github.com/kosrodka). MIT License.</string>
 </dict>
 </plist>
 PLIST
