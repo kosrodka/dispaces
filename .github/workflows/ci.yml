@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build, test, security checks (macOS 26)
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Source guard rails
+        run: scripts/source-check.sh
+
+      - name: Unit tests
+        run: swift test --parallel
+
+      - name: Build app bundle
+        run: scripts/bundle.sh 0.1.0
+
+      - name: Binary security checks
+        run: scripts/security-check.sh build/SpacesBar.app
+
+      - name: Smoke test (launches, stays up for 5 s, quits)
+        run: |
+          build/SpacesBar.app/Contents/MacOS/SpacesBar &
+          pid=$!
+          sleep 5
+          if ! kill -0 "$pid" 2>/dev/null; then echo "app exited early"; exit 1; fi
+          echo "open sockets (expect none):"
+          if lsof -nP -i -a -p "$pid"; then echo "FAIL: app has network sockets"; kill "$pid"; exit 1; fi
+          kill "$pid"
+          echo "PASS: launched, no sockets"
+
+      - name: Checksum
+        run: cat build/SpacesBar.zip.sha256
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: SpacesBar-${{ github.sha }}
+          path: |
+            build/SpacesBar.zip
+            build/SpacesBar.zip.sha256
+          retention-days: 14
+          if-no-files-found: error

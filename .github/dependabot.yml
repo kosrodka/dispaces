@@ -1,0 +1,8 @@
+version: 2
+updates:
+  # The app has no dependencies; only the pinned GitHub Actions are watched.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

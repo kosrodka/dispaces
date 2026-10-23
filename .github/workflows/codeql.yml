@@ -1,0 +1,60 @@
+name: CodeQL
+
+# Static analysis of the Swift code. Private repositories on a personal plan
+# can't upload to GitHub code scanning, so results are kept as a SARIF artifact
+# and the job fails if CodeQL reports any error-level finding.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: macos-26
+    timeout-minutes: 45
+    permissions:
+      actions: read          # the CodeQL action reads its own run's metadata
+      contents: read
+      security-events: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          languages: swift
+          build-mode: manual
+          queries: security-and-quality
+
+      - name: Build
+        run: swift build -c debug
+
+      - uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          upload: never
+          output: sarif
+
+      - name: Fail on error-level findings
+        run: |
+          shopt -s nullglob
+          files=(sarif/*.sarif)
+          [ ${#files[@]} -gt 0 ] || { echo "no SARIF produced"; exit 1; }
+          jq -r '.runs[].results[] | "\(.level // "warning")\t\(.ruleId)\t\(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine)\t\(.message.text)"' "${files[@]}" | tee findings.tsv
+          errors=$(awk -F'\t' '$1=="error"' findings.tsv | wc -l | tr -d ' ')
+          echo "error-level findings: $errors"
+          [ "$errors" -eq 0 ]
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: codeql-sarif
+          path: sarif/
+          retention-days: 30
