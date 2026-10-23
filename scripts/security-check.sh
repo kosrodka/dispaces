@@ -4,8 +4,8 @@
 # tap input events, or isn't signed with the hardened runtime and no entitlements.
 set -euo pipefail
 
-APP="${1:-build/SpacesBar.app}"
-BIN="$APP/Contents/MacOS/SpacesBar"
+APP="${1:-build/Dispaces.app}"
+BIN="$APP/Contents/MacOS/Dispaces"
 fail=0
 pass() { echo "PASS  $1"; }
 bad()  { echo "FAIL  $1"; fail=1; }

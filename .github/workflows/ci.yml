@@ -38,11 +38,11 @@ jobs:
         run: scripts/bundle.sh 0.1.0
 
       - name: Binary security checks
-        run: scripts/security-check.sh build/SpacesBar.app
+        run: scripts/security-check.sh build/Dispaces.app
 
       - name: Smoke test (launches, stays up for 5 s, quits)
         run: |
-          build/SpacesBar.app/Contents/MacOS/SpacesBar &
+          build/Dispaces.app/Contents/MacOS/Dispaces &
           pid=$!
           sleep 5
           if ! kill -0 "$pid" 2>/dev/null; then echo "app exited early"; exit 1; fi
@@ -52,13 +52,13 @@ jobs:
           echo "PASS: launched, no sockets"
 
       - name: Checksum
-        run: cat build/SpacesBar.zip.sha256
+        run: cat build/Dispaces.zip.sha256
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: SpacesBar-${{ github.sha }}
+          name: Dispaces-${{ github.sha }}
           path: |
-            build/SpacesBar.zip
-            build/SpacesBar.zip.sha256
+            build/Dispaces.zip
+            build/Dispaces.zip.sha256
           retention-days: 14
           if-no-files-found: error
