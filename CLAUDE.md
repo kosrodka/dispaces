@@ -2,7 +2,7 @@
 
 The app's visible name is Dispaces. The bundle ID `io.github.kosrodka.SpacesBar`, the `SpacesBar` target and executable and `SpacesBar.app` keep the name SpacesBar so preferences, Space names and the Accessibility grant stay valid; don't rename them.
 
-A small macOS menu-bar app that shows every Space per display in a floating bar and switches Space on click. Owner: Kamil (kosrodka).
+A small macOS menu-bar app that shows every Space per display in a floating bar and switches Space on click. Owner: Kamil Ośródka (kosrodka).
 
 ## Priorities (in this order)
 1. Security: no breaches, no data loss.

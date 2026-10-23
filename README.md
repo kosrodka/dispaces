@@ -31,4 +31,4 @@ Full install steps, including downloading a release instead of building: [Operat
 
 ## License
 
-[MIT](LICENSE). Copyright 2026 Kamil (kosrodka).
+[MIT](LICENSE). Copyright 2026 Kamil Ośródka.
