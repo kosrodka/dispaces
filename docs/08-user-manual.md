@@ -87,6 +87,5 @@ Menu bar icon › Manage displays and spaces opens a normal window you can close
 ## Privacy and limits
 
 - No network access, no scripts, no other permissions than Accessibility. Dispaces writes only its own preferences.
-- Only desktops 1 to 16 can be switched to; macOS has no shortcut beyond 16.
-- A full-screen app's Space can be reached only from its own display's bar.
+- Desktops 1 to 16 switch with one shortcut. macOS has no shortcut beyond 16, so those desktops, like a full-screen app's Space, are reached step by step and only from their own display's bar.
 - The name of a display's first desktop follows the display, since macOS gives that desktop no lasting id.

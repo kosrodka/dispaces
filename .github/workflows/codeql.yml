@@ -1,8 +1,7 @@
 name: CodeQL
 
-# Static analysis of the Swift code. Private repositories on a personal plan
-# can't upload to GitHub code scanning, so results are kept as a SARIF artifact
-# and the job fails if CodeQL reports any error-level finding.
+# Static analysis of the Swift code. Results are kept as a SARIF artifact and
+# the job fails if CodeQL reports any error-level finding.
 
 on:
   push:

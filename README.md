@@ -1,4 +1,4 @@
-# Dispaces (formerly Spaces Bar)
+# Dispaces
 
 Manage macOS Spaces (Desktops): a small floating bar for macOS 26 and 27 that shows the Spaces of every display, highlights the current one, lets you name displays and Spaces, and switches Space when you click a tile.
 
@@ -8,7 +8,7 @@ Manage macOS Spaces (Desktops): a small floating bar for macOS 26 and 27 that sh
 
 - No network access, no third-party code, no auto-update.
 - Needs one permission: Accessibility (to press your own "Switch to Desktop N" shortcuts).
-- The app was renamed from Spaces Bar; the built app is still called `SpacesBar.app` (bundle ID `io.github.kosrodka.SpacesBar`) so existing settings carry over.
+- The built app is called `SpacesBar.app` (bundle ID `io.github.kosrodka.SpacesBar`).
 
 | Doc | |
 |---|---|

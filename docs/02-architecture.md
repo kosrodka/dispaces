@@ -7,8 +7,8 @@
 | Option | Verdict |
 |---|---|
 | Public API | **None exists.** macOS has no public API that lists Spaces. |
-| `CGSCopyManagedDisplaySpaces` (private, in SkyLight, re-exported by CoreGraphics), plus `CGSGetActiveSpace` to know which display you are using | **Chosen.** Read-only, returns every display with its Spaces and its current Space. Used by every Spaces tool (Spaceman, yabai, Amethyst, Hammerspoon) for over 10 years, and confirmed working on macOS 27. Risk: Apple could change it; mitigated by defensive parsing and a clear "can't read Spaces" warning instead of a crash. |
-| `CGSCopySpacesForWindows` (private, read-only) with the public window list (`CGWindowListCopyWindowInfo`), for the hover icons (F10) | **Chosen** (Kamil, 20 Oct 2026). macOS has no public way to ask which Space a window is on. Only window numbers and owning processes are used; titles would need Screen Recording and are never read. Lives in `SpaceAppsReader.swift` only. Alternative considered: remember the apps seen on each Space while it was showing (public only, but stale). |
+| `CGSCopyManagedDisplaySpaces` (private, in SkyLight, re-exported by CoreGraphics), plus `CGSGetActiveSpace` to know which display you are using | **Chosen.** Read-only, returns every display with its Spaces and its current Space. Used by many Spaces tools (Spaceman, yabai, Amethyst, Hammerspoon) for over 10 years, and works on macOS 26 and 27. Risk: Apple could change it; mitigated by defensive parsing and a clear "can't read Spaces" warning instead of a crash. |
+| `CGSCopySpacesForWindows` (private, read-only) with the public window list (`CGWindowListCopyWindowInfo`), for the hover icons (F10) | **Chosen.** macOS has no public way to ask which Space a window is on. Only window numbers and owning processes are used; titles would need Screen Recording and are never read. Lives in `SpaceAppsReader.swift` only. Alternative considered: remember the apps seen on each Space while it was showing (public only, but stale). |
 | Screen-scraping Mission Control / Accessibility tree of the Dock | Fragile, slow, needs more permissions. Rejected. |
 
 ### How the app switches Space
@@ -17,12 +17,12 @@
 |---|---|---|---|
 | Post the user's own "Switch to Desktop N" shortcut as a keyboard event (`CGEvent`) | Accessibility | High: it is exactly what macOS does when you press the keys. Requires the shortcut to be on. | **Chosen** for desktops 1–16. |
 | Post "Move one Space left/right" N times (`CGEvent`) | Accessibility | Medium: visible steps, acts on the display under the mouse. | **Fallback** for full-screen Spaces and desktops > 16, only on the display under the pointer (with one bar per display, that is always the display whose bar was clicked). |
-| AppleScript `tell System Events to key code …` (what Spaceman does) | Accessibility + Automation | Lower: slower (spawns Apple Events), a second permission, can time out. | Rejected. Likely part of why Spaceman's clicks felt unreliable. |
+| AppleScript `tell System Events to key code …` (what Spaceman does) | Accessibility + Automation | Lower: slower (spawns Apple Events), a second permission, can time out. | Rejected. |
 | Private `CGSManagedDisplaySetCurrentSpace` | none | **Low:** changes the picture but the Dock and window focus don't follow; windows end up on the wrong Space. | Rejected (data-loss-adjacent: windows appear "lost"). |
 | yabai-style Dock injection | **SIP disabled** | High | Rejected: disabling System Integrity Protection is a major security downgrade. |
 | Synthetic trackpad swipe events | Accessibility | Medium; depends on gesture settings | Rejected. |
 
-The keyboard-shortcut method has one more advantage: the app can **read** your shortcut settings (`com.apple.symbolichotkeys`, read-only) and tell you before a click if a shortcut is off, instead of failing silently.
+The keyboard-shortcut method has one more advantage: the app can **read** your shortcut settings (`com.apple.symbolichotkeys`, read-only) and say before a click if a shortcut is off, instead of failing silently.
 
 ### UI technology
 
@@ -37,9 +37,9 @@ The keyboard-shortcut method has one more advantage: the app can **read** your s
 | Choice | Why |
 |---|---|
 | Swift 6 toolchain (Swift 5 language mode), AppKit, Foundation, CoreGraphics, ServiceManagement | All Apple system frameworks. No third-party code, so nothing to vet but our own. |
-| Swift Package Manager, no `.xcodeproj` | A `Package.swift` is 30 readable lines; an Xcode project file is thousands of opaque lines. Builds the same on CI and on your Mac with `swift build`. |
-| One tiny C target for the three private, read-only function declarations | Correct C calling convention and CoreFoundation ownership rules (`CF_RETURNS_RETAINED`) instead of Swift `@_silgen_name` hacks. If Apple removes a symbol, the build fails loudly on CI instead of crashing on your Mac. |
-| `scripts/bundle.sh` wraps the binary into `SpacesBar.app` | Writes Info.plist, signs with hardened runtime. ~60 lines of shell you can read. |
+| Swift Package Manager, no `.xcodeproj` | A `Package.swift` is 30 readable lines; an Xcode project file is thousands of opaque lines. Builds the same on CI and on any Mac with `swift build`. |
+| One tiny C target for the private, read-only function declarations | Correct C calling convention and CoreFoundation ownership rules (`CF_RETURNS_RETAINED`) instead of Swift `@_silgen_name` hacks. If Apple removes a symbol, the build fails loudly on CI instead of crashing on your Mac. |
+| `scripts/bundle.sh` wraps the binary into `SpacesBar.app` | Writes Info.plist, signs with hardened runtime. About 60 lines of readable shell. |
 
 ## 2.2 Architecture
 
@@ -52,7 +52,7 @@ The keyboard-shortcut method has one more advantage: the app can **read** your s
 │     │                                                     SnapshotParser  raw dictionaries → Model│
 │     ├─ SpaceMonitor ── on change ─▶ BarController         NameStore    names, sanitising, JSON    │
 │     │    • NSWorkspace activeSpaceDidChange               Hotkeys      parse symbolichotkeys      │
-│     │    • screen parameters change, wake                 SwitchPlanner Space → which keys to press│
+│     │    • screen parameters change, wake                 SwitchPlanner Space → keys to press     │
 │     │    • 60 s timer (safety net)                                                                │
 │     │    └─ SpaceReader ──▶ CGSPrivate (C) ──▶ CGSCopyManagedDisplaySpaces (read-only)            │
 │     │                                                                                             │
@@ -61,8 +61,8 @@ The keyboard-shortcut method has one more advantage: the app can **read** your s
 │     ├─ SpaceSwitcher ── plans with SwitchPlanner, posts CGEvents, verifies, retries once          │
 │     │    └─ KeyPoster ──▶ CGEvent.post(.cghidEventTap)   (needs Accessibility)                    │
 │     │                                                                                             │
-│     ├─ StatusMenu ── menu bar icon: Show bars, Lock all bars, Launch at login, Setup check, Quit  │
-│     ├─ SetupCheck ── Accessibility granted? shortcuts on? "Displays have separate Spaces" on?    │
+│     ├─ Menu bar icon ── Show bars, Lock all bars, options, Manage window, Setup check, Help, Quit │
+│     ├─ Setup check ── Accessibility granted? shortcuts on? "Displays have separate Spaces" on?    │
 │     └─ Preferences ── UserDefaults (own domain only) via Names and BarLayout validation           │
 └───────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -104,10 +104,10 @@ Deleting a Space in Mission Control leaves its old name unused in preferences; i
 
 | Layer | Choice |
 |---|---|
-| OS | macOS 26.0+ (tested on 26 in CI, 27.0.1 by hand) |
+| OS | macOS 26.0+ (built and tested on 26 in CI, checked by hand on 27) |
 | Language | Swift (Swift 6 toolchain, Swift 5 language mode) |
 | UI | AppKit (`NSPanel`, `NSView`, `NSStatusItem`, `NSAlert`) |
-| System | CoreGraphics (`CGEvent`, private `CGSCopyManagedDisplaySpaces`), ServiceManagement (`SMAppService` for launch at login) |
+| System | CoreGraphics (`CGEvent`, window list, private read-only `CGS…` calls), AppKit (`NSRunningApplication` for the apps column), ServiceManagement (`SMAppService` for launch at login) |
 | Storage | `UserDefaults`, own domain `io.github.kosrodka.SpacesBar` |
 | Build | Swift Package Manager + `scripts/bundle.sh`, ad-hoc code signing with hardened runtime |
 | Tests | XCTest (unit tests for `SpacesCore`), `scripts/security-check.sh` (binary checks) |

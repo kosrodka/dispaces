@@ -67,8 +67,8 @@ Check everything at once: menu bar icon › **Setup check…**. All four lines s
 
 ## 6.4 Update
 
-1. Pull or download the new version and repeat §6.1.
-2. Quit the old app first (menu bar icon › Quit).
+1. Quit the old app (menu bar icon › Quit).
+2. Pull or download the new version and repeat §6.1.
 3. **Accessibility after an update:** macOS ties the permission to the app's signature, and each ad-hoc signed build has a new one. If clicks stop switching after an update: System Settings › Privacy & Security › Accessibility › select SpacesBar › **−**, then click a tile and allow it again. (To avoid this, sign with your own stable certificate: create a "Code Signing" certificate in Keychain Access › Certificate Assistant, then `SIGN_IDENTITY="Your Cert Name" scripts/bundle.sh 0.1.1`.)
 
 ## 6.5 Troubleshooting
@@ -88,8 +88,8 @@ Logs (no names are ever logged): `log stream --predicate 'subsystem == "io.githu
 ## 6.6 Back up and restore names
 
 ```sh
-defaults export io.github.kosrodka.SpacesBar ~/spaces-bar-backup.plist
-defaults import io.github.kosrodka.SpacesBar ~/spaces-bar-backup.plist
+defaults export io.github.kosrodka.SpacesBar ~/dispaces-backup.plist
+defaults import io.github.kosrodka.SpacesBar ~/dispaces-backup.plist
 ```
 
 ## 6.7 Uninstall (leaves nothing behind)
@@ -100,25 +100,22 @@ defaults import io.github.kosrodka.SpacesBar ~/spaces-bar-backup.plist
 4. System Settings › Privacy & Security › Accessibility › remove SpacesBar.
 5. Optionally turn the Switch to Desktop shortcuts back off.
 
-## 6.8 Pen tests on your Mac (P1–P12 from docs/04-security.md)
+## 6.8 Pen tests on your Mac (P1–P15 from docs/04-security.md)
 
 Run with the app installed and running. Record results in `docs/07-pen-test-report.md`.
 
 ```sh
 APP=/Applications/SpacesBar.app; PID=$(pgrep -x SpacesBar)
-
 ```
 
 P1 no network: expect no output from lsof, no rows with traffic in nettop:
 ```sh
 lsof -nP -i -a -p "$PID"; nettop -p "$PID" -l 1 -x
-
 ```
 
 P2 integrity: hash must match the release page / CI log:
 ```sh
 shasum -a 256 ~/Downloads/SpacesBar.zip
-
 ```
 
 P3 signature: expect flags=0x10000(runtime) and no entitlements:
@@ -126,7 +123,6 @@ P3 signature: expect flags=0x10000(runtime) and no entitlements:
 codesign -dv --verbose=4 "$APP" 2>&1 | grep -E 'flags|Identifier|Signature'
 codesign -d --entitlements - "$APP"
 scripts/security-check.sh "$APP"
-
 ```
 
 P4 injection: build a dummy dylib that logs if loaded; expect no "INJECTED":
@@ -136,13 +132,11 @@ clang -dynamiclib /tmp/inj.c -o /tmp/inj.dylib
 osascript -e 'quit app "SpacesBar"' 2>/dev/null; pkill -x SpacesBar
 DYLD_INSERT_LIBRARIES=/tmp/inj.dylib "$APP/Contents/MacOS/SpacesBar" & sleep 3; pkill -x SpacesBar
 open "$APP"
-
 ```
 
 P5 hostile names: rename a Space by hand to each of these (copy/paste), check it shows ≤ 24 chars, literally, no crash:
 ```sh
 printf 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nabc‮exe.txt\n%%@%%n%%s%%x\n🇵🇱🇵🇱👩‍👩‍👧‍👦é\n'
-
 ```
 
 P6 corrupt preferences: expect the app to start with default names, no crash:
@@ -153,7 +147,6 @@ defaults write io.github.kosrodka.SpacesBar spaceNames -string garbage
 defaults write io.github.kosrodka.SpacesBar barOffsets -string nope
 open "$APP"; sleep 3; pgrep -x SpacesBar && echo "still running: PASS"
 pkill -x SpacesBar; defaults import io.github.kosrodka.SpacesBar /tmp/sb-backup.plist; open "$APP"
-
 ```
 
 P12 login items: after enabling then disabling Launch at login:
