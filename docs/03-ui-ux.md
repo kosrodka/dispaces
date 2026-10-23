@@ -1,6 +1,6 @@
 # 3. UI and UX
 
-Changes from the original mockups made while coding: the setup check is a standard macOS alert, and the failure message appears in a small panel under the bar.
+The setup check is a standard macOS alert, and failure messages appear in a small panel under the bar.
 
 ## 3.1 The bar
 
@@ -62,9 +62,9 @@ Colour is never the only signal: current tiles are also bold, and VoiceOver read
 | Menu bar icon › Help › User manual | A normal, read-only window with the user manual (built into the app, same text as docs/08-user-manual.md); text can be selected and copied. Command-W closes it, Command-M minimises it (also in the Manage window). |
 | Menu bar icon (three Space tiles, the middle one filled) | Show bars ✓ (hides or shows all bars), Lock all bars ✓ (ticked when every bar is locked), Option-drag windows to Spaces ✓ (off by default), Show apps on hover ✓ (on by default), Launch at login, Manage displays and spaces, Setup check…, Refresh now, Help › (Current release, User manual), version line "no network access", Quit. |
 
-Keyboard: none in v0.1 (the bar never takes focus, by design, so it can't steal your typing).
+Keyboard: the bars take no keyboard input (they never take focus, by design, so they can't steal your typing). The Manage and manual windows support Command-Z, Shift-Command-Z, Command-W and Command-M as described above.
 
-## 3.4 Setup check window
+## 3.4 Setup check
 
 Four lines, each ✓ or ✕/! with the exact place to fix it:
 1. Accessibility permission (needed only to press the Switch to Desktop shortcuts).
@@ -84,5 +84,5 @@ Button "Open System Settings" opens the relevant pane (Accessibility or Keyboard
 
 - **Mission Control:** the bar stays put and is not shown as a window in the spread.
 - **Stage Manager:** the bar never becomes a stage; clicking it doesn't change the active stage.
-- **Dock / Cmd-Tab:** the app has no Dock icon and is not in Cmd-Tab (menu-bar app).
+- **Dock / Cmd-Tab:** the app has no Dock icon and is not in Cmd-Tab (menu-bar app), except while the Manage or manual window is open.
 - **Full-screen apps:** the bar also shows over full-screen apps; hide it from the menu if it's in the way.

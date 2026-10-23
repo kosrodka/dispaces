@@ -1,6 +1,6 @@
-# Dispaces (formerly Spaces Bar): notes for Claude Code
+# Dispaces
 
-The app is named Dispaces (renamed from Spaces Bar on 23 Oct 2026). Only the visible name changed: the bundle ID `io.github.kosrodka.SpacesBar`, the `SpacesBar` target and executable and `SpacesBar.app` stay, so preferences, Space names and the Accessibility grant carry over.
+The app's visible name is Dispaces. The bundle ID `io.github.kosrodka.SpacesBar`, the `SpacesBar` target and executable and `SpacesBar.app` keep the name SpacesBar so preferences, Space names and the Accessibility grant stay valid; don't rename them.
 
 A small macOS menu-bar app that shows every Space per display in a floating bar and switches Space on click. Owner: Kamil (kosrodka).
 
@@ -18,7 +18,7 @@ A small macOS menu-bar app that shows every Space per display in a floating bar 
 - Window list: only `SpaceAppsReader.swift` may read it (hover icons), and only each window's number, owning process, layer, alpha and size. Never titles or contents, never Screen Recording. `source-check.sh` enforces this.
 - Other apps: only `AppActivator` (System.swift) may bring one to the front, and only when the user clicks it in the apps column. Never quit, hide or force-quit apps (`source-check.sh` enforces this).
 - Option-drag (opt-in) only reads pointer position, mouse buttons and modifier flags via public `NSEvent` class properties and presses a Switch to Desktop shortcut; macOS carries the window the user is holding. No AX, no mouse events, no global monitors (`source-check.sh` enforces this).
-- Private API: only the read-only `CGSMainConnectionID`, `CGSCopyManagedDisplaySpaces`, `CGSGetActiveSpace` and `CGSCopySpacesForWindows` (hover icons; Kamil approved 20 Oct 2026). Don't add private write calls (e.g. `CGSManagedDisplaySetCurrentSpace`).
+- Private API: only the read-only `CGSMainConnectionID`, `CGSCopyManagedDisplaySpaces`, `CGSGetActiveSpace` and `CGSCopySpacesForWindows` (hover icons; approved by the owner on 20 Oct 2026). Don't add private write calls (e.g. `CGSManagedDisplaySetCurrentSpace`).
 - The only regular windows are "Manage displays and spaces" (`ManageWindow.swift`) and the User manual (`HelpWindow.swift`), both `AppWindow`; the app shows in the Dock only while one is open. The manual text lives in `UserManual.swift` and must match `docs/08-user-manual.md` (a test checks); update both when behaviour changes. Disconnected displays' Spaces are remembered in `DisplayMemory` (own preferences); macOS still moves them, the app only groups them; dragging or forgetting in that window changes only this grouping.
 - Pin GitHub Actions by full commit SHA with the version in a comment.
 

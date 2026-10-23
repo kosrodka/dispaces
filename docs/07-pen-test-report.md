@@ -4,7 +4,7 @@ Plan: [04-security.md §4.5](04-security.md). Commands: [06-operations.md §6.8]
 
 ## 7.1 Automated (GitHub Actions, macOS 26.6.2, Xcode 26.6, Swift 6.3.3), 19 Oct 2026
 
-Run on every push; results below are from the CI runs on `main` (Actions tab › CI).
+These results are from the first CI runs on `main` on 19 Oct 2026. CI repeats the checks on every push (Actions tab › CI); the unit test suite and `source-check.sh` (C13–C15) have grown since.
 
 | Control | Check | Result |
 |---|---|---|
@@ -18,7 +18,7 @@ Run on every push; results below are from the CI runs on `main` (Actions tab ›
 | — | Only `/System/Library` and `/usr/lib` libraries linked; bundle holds only the binary (no helpers, frameworks, plug-ins); Info.plist has no URL schemes, services, AppleScript or ATS exceptions | PASS |
 | C11 | CodeQL 2.27.2, security-and-quality queries on all app and core sources | PASS: 0 error-level findings |
 
-## 7.2 Manual on a real Mac (macOS 27.0.1): to do
+## 7.2 Manual on a real Mac (macOS 27): not yet recorded
 
 | ID | Test | Result | Notes |
 |---|---|---|---|
@@ -34,12 +34,15 @@ Run on every push; results below are from the CI runs on `main` (Actions tab ›
 | P10 | Display hot-plug, sleep/wake | ☐ | |
 | P11 | No windows lost | ☐ | |
 | P12 | Login item cleaned up | ☐ | |
+| P13 | Option-drag scope | ☐ | |
+| P14 | Hover icons: no Screen Recording, windows unchanged | ☐ | |
+| P15 | Apps column clicks | ☐ | |
 
 Functional checks on macOS 27 at the same time:
 
 | Check | Result |
 |---|---|
-| Areas match your displays, in Mission Control order | ☐ |
+| One bar per display, Spaces in Mission Control order | ☐ |
 | Tile numbers match "Switch to Desktop N" (click 4 on the second display goes there) | ☐ |
 | Highlight follows Space changes made with the keyboard, trackpad and Mission Control | ☐ |
 | Full-screen app shows as dashed "FS" tile | ☐ |
@@ -57,7 +60,7 @@ Functional checks on macOS 27 at the same time:
 ## 7.4 Residual risks (accepted for v0.1)
 
 1. **Private API.** A future macOS could change `CGSCopyManagedDisplaySpaces`. Impact: the bar shows "Can't read Spaces"; no crash, no data loss.
-2. **Accessibility is powerful.** Mitigated by code size (~1,750 lines including comments), the key allow-list, no event reading, hardened runtime, and CI binary checks. Review any future change to `KeyPoster`.
+2. **Accessibility is powerful.** Mitigated by code size (about 4,400 lines of Swift including comments), the key allow-list, no event reading, hardened runtime, and CI binary checks. Review any future change to `KeyPoster`.
 3. **Not notarised.** Downloads need the quarantine flag removed. Building from source avoids this.
 4. **Ad-hoc signature.** Accessibility must be re-granted after each update unless you sign with your own certificate (06-operations §6.4).
-5. **CI isn't a real macOS 27 desktop.** Switching, highlighting and Stage Manager behaviour can only be verified on your Mac (§7.2).
+5. **CI isn't a real macOS 27 desktop.** Switching, highlighting and Stage Manager behaviour can only be verified on a real Mac (§7.2).
