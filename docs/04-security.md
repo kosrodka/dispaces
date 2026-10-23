@@ -16,11 +16,11 @@
 | Network (outgoing or listening) | **No.** No networking code, no network entitlement needed, verified on the binary in CI. |
 | IPC: XPC, Mach services, Apple Events, URL schemes, distributed notifications | **No.** The app registers none and accepts none. |
 | Files read | Own preferences; `com.apple.symbolichotkeys` (read-only). |
-| Files written | Own preferences only (`~/Library/Preferences/io.github.kosrodka.SpacesBar.plist`), now including `displayMemory`: per display its id, name, last-connected time and its Spaces' keys, ids and names (validated on read, capped at 16 displays × 64 Spaces). |
+| Files written | Own preferences only (`~/Library/Preferences/io.github.kosrodka.SpacesBar.plist`), including `displayMemory`: per display its id, name, last-connected time and its Spaces' keys, ids and names (validated on read, capped at 16 displays × 64 Spaces). |
 | Processes launched | **None.** |
 | Scripts | **None** (no AppleScript, no shell, no JavaScript). |
 | Event taps (reading keyboard/mouse) | **None.** The app only *posts* events; it never listens to your typing. With "Option-drag windows to Spaces" on, it samples the pointer position, which mouse buttons are down and which modifier keys are held (public `NSEvent.mouseLocation`, `pressedMouseButtons`, `modifierFlags`) 20 times a second. No key codes, no typed text, no event tap or global monitor, no permission. |
-| Private API | Three read-only calls: `CGSCopyManagedDisplaySpaces` (the Space list), `CGSGetActiveSpace` (which Space has focus) and `CGSCopySpacesForWindows` (which Space a window is on, for the hover icons). |
+| Private API | Read-only calls only: `CGSMainConnectionID` (the app's own connection), `CGSCopyManagedDisplaySpaces` (the Space list), `CGSGetActiveSpace` (which Space has focus) and `CGSCopySpacesForWindows` (which Space a window is on, for the hover icons). |
 | Other apps' windows | Read only, on hover, in `SpaceAppsReader.swift`: the public window list's window number, owning process, layer, alpha and size, to work out which apps are on a Space. Never titles or contents (so no Screen Recording permission), never stored, never changed. Nothing else touches windows: Option-drag works because macOS itself carries a window you are holding when the Space changes. |
 | User input | Names typed into the rename dialog. |
 | Third-party code | **None.** |
@@ -30,7 +30,7 @@
 | # | Threat | Control |
 |---|---|---|
 | T1 | **Code injection into the app** to borrow its Accessibility permission (`DYLD_INSERT_LIBRARIES`, malicious plugin) | Hardened runtime on (`--options runtime`), no entitlements that weaken it (no `disable-library-validation`, no `allow-dyld-environment-variables`, no `get-task-allow`). App loads no plugins or bundles. CI fails if the binary isn't signed this way. |
-| T2 | **Tampered binary** (swapped build, CI compromise) | Build only from source you can read; GitHub Actions pinned to full commit SHAs; SHA-256 published with each build and printed in the CI log and backed by a build provenance attestation; building from source on your Mac remains the strongest option; macOS TCC ties the Accessibility grant to the code signature, so a swapped binary loses the permission. |
+| T2 | **Tampered binary** (swapped build, CI compromise) | Build only from source you can read; GitHub Actions pinned to full commit SHAs; SHA-256 published with each build and printed in the CI log; releases also carry a build provenance attestation; building from source on your Mac remains the strongest option; macOS TCC ties the Accessibility grant to the code signature, so a swapped binary loses the permission. |
 | T3 | **Keystroke abuse** (the app made to type something other than a Space shortcut) | `KeyPoster` can only post key codes that come from your own Mission Control shortcut settings (IDs 79, 81, 118–133) or Apple's documented defaults; anything else is rejected. One switch at a time; clicks during a switch are ignored; at most 32 key presses per switch. |
 | T4 | **Malicious names** (very long, control characters, right-to-left override spoofing, format strings) | `NameStore.sanitize`: strip control characters and Unicode bidi overrides (U+202A–U+202E, U+2066–U+2069), trim, cut to 24 characters (by grapheme). Names are only ever displayed as plain text; never interpreted. Unit-tested. |
 | T5 | **Tampered preferences file** (another process writes junk) | On load, every value is type-checked and re-sanitised; invalid entries are dropped; at most 256 entries; invalid bar position falls back to default. Any local process running as you could already do worse, so this is about not crashing, not about trust. |
@@ -57,18 +57,18 @@
 | C7 | Preferences validated | Unit tests, pen test P6 |
 | C8 | Parser never crashes on malformed data | Unit tests (`SnapshotParserTests`) incl. randomised fuzz test |
 | C9 | Actions pinned to SHAs, least-privilege workflows | Review + Dependabot |
-| C10 | Build integrity: SHA-256 per build, pinned actions, provenance when public | Release workflow, pen test P2 |
+| C10 | Build integrity: SHA-256 per build, pinned actions, provenance attestation on releases | Release workflow, pen test P2 |
+| C11 | Static analysis | CodeQL (Swift) on pushes to `main`, PRs and weekly |
 | C12 | Forbidden APIs never appear in source | CI `source-check.sh` |
 | C13 | No window access, mouse-event posting, cursor warping or global event monitors (`AXUIElement`, `CGEventCreateMouseEvent`, `mouseEventSource`, `CGWarpMouseCursorPosition`, `addGlobalMonitorForEvents`) | CI `source-check.sh`, pen test P13 |
 | C14 | Window list read in one file only; window titles, screen capture and private window-changing calls never appear (`kCGWindowName`, `CGWindowListCreateImage`, ScreenCaptureKit, `CGSAddWindowsToSpaces`, `CGSSetWindow…`) | CI `source-check.sh`, pen test P14 |
 | C15 | Other apps are brought to the front only by `AppActivator`; quitting, force-quitting or hiding apps never appears (`forceTerminate`, `.terminate()`, `.hide()`) | CI `source-check.sh`, pen test P15 |
-| C11 | Static analysis | CodeQL (Swift) on every push |
 
 ## 4.5 Pen-test plan
 
-Automated (run on every push by CI on a macOS 26 runner): C1–C8, C11, C12, plus a launch smoke test that fails if the app opens any socket.
+Automated (run by CI on a macOS 26 runner): C1–C8 and C11–C15, plus a launch smoke test that fails if the app opens any socket.
 
-Manual (on your Mac, macOS 27.0.1; ~20 minutes; exact commands in `docs/06-operations.md` §6.8):
+Manual (on a real Mac with macOS 26 or 27; about 20 minutes; exact commands in `docs/06-operations.md` §6.8):
 
 | ID | Test | Pass when |
 |---|---|---|
@@ -81,7 +81,7 @@ Manual (on your Mac, macOS 27.0.1; ~20 minutes; exact commands in `docs/06-opera
 | P7 | **Keystroke scope:** with TextEdit focused, click tiles quickly 20 times | Only Space switches happen; no characters typed into TextEdit |
 | P8 | **Permission revoked mid-run:** remove Accessibility while running, click a tile | No crash; amber **!** and clear message |
 | P9 | **Shortcut off:** turn off "Switch to Desktop 3", click tile 3 | Message names the shortcut to turn on; nothing else pressed |
-| P10 | **Display hot-plug and sleep/wake:** unplug/replug the external display, sleep/wake | Bar redraws correct areas within a second, names kept |
+| P10 | **Display hot-plug and sleep/wake:** unplug/replug the external display, sleep/wake | Bars match the connected displays within about a second, names kept |
 | P11 | **Data loss check:** before/after a session of switching, compare window counts per app (`Window` menu) | Nothing closed, nothing missing |
 | P12 | **Persistence check:** `sfltool dumpbtm \| grep -i spaces` after enabling/disabling Launch at login | Only the app itself is registered; nothing left after disabling |
 | P13 | **Option-drag scope:** with the setting off, Option-drag a window over the bar; then turn it on, sweep a held window quickly across the tiles, then rest on one | Off: nothing happens. On: no switch while sweeping; one switch after resting; window arrives with its size and content unchanged; Option-clicking a tile without holding a window just switches, as a plain click does |
