@@ -69,15 +69,7 @@ Check everything at once: menu bar icon › **Setup check…**. All four lines s
 
 1. Quit the old app (menu bar icon › Quit).
 2. Pull or download the new version and repeat §6.1.
-3. **Accessibility after an update:** macOS ties the permission to the app's signature, and each ad-hoc signed build has a new one. If clicks stop switching after an update: System Settings › Privacy & Security › Accessibility › select Dispaces (or the old SpacesBar entry) › **−**, then click a tile and allow it again. (To avoid this, sign with your own stable certificate: create a "Code Signing" certificate in Keychain Access › Certificate Assistant, then `SIGN_IDENTITY="Your Cert Name" scripts/bundle.sh 0.1.1`.)
-
-### Moving from SpacesBar.app (builds before 23 Oct 2026)
-
-The app used to install as `/Applications/SpacesBar.app` (process `SpacesBar`). Names, bar positions and every other setting carry over, since the bundle ID is unchanged. After installing `Dispaces.app`:
-
-1. Quit and remove the old copy: `pkill -x SpacesBar` then drag `/Applications/SpacesBar.app` to the Bin (or `rm -rf /Applications/SpacesBar.app`).
-2. Accessibility: System Settings › Privacy & Security › Accessibility › select the old **SpacesBar** entry › **−**. Click a Dispaces tile and allow it.
-3. If you used Launch at login, tick it again in the menu bar icon's menu.
+3. **Accessibility after an update:** macOS ties the permission to the app's signature, and each ad-hoc signed build has a new one. If clicks stop switching after an update: System Settings › Privacy & Security › Accessibility › select Dispaces › **−**, then click a tile and allow it again. (To avoid this, sign with your own stable certificate: create a "Code Signing" certificate in Keychain Access › Certificate Assistant, then `SIGN_IDENTITY="Your Cert Name" scripts/bundle.sh 0.1.1`.)
 
 ## 6.5 Troubleshooting
 
@@ -150,16 +142,16 @@ printf 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nabc‮exe.txt\n%%@%%n%
 P6 corrupt preferences: expect the app to start with default names, no crash:
 ```sh
 pkill -x Dispaces
-defaults export io.github.kosrodka.SpacesBar /tmp/sb-backup.plist
+defaults export io.github.kosrodka.SpacesBar /tmp/dispaces-backup.plist
 defaults write io.github.kosrodka.SpacesBar spaceNames -string garbage
 defaults write io.github.kosrodka.SpacesBar barOffsets -string nope
 open "$APP"; sleep 3; pgrep -x Dispaces && echo "still running: PASS"
-pkill -x Dispaces; defaults import io.github.kosrodka.SpacesBar /tmp/sb-backup.plist; open "$APP"
+pkill -x Dispaces; defaults import io.github.kosrodka.SpacesBar /tmp/dispaces-backup.plist; open "$APP"
 ```
 
 P12 login items: after enabling then disabling Launch at login:
 ```sh
-sfltool dumpbtm 2>/dev/null | grep -i -A3 spacesbar
+sfltool dumpbtm 2>/dev/null | grep -i -A3 dispaces
 ```
 
 Manual ones:

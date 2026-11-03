@@ -1,6 +1,6 @@
 # Dispaces
 
-The app is Dispaces: `Dispaces.app`, executable and process `Dispaces` (renamed 23 Oct 2026). The bundle ID `io.github.kosrodka.SpacesBar` (also the preferences domain and log subsystem) and the SwiftPM `SpacesBar` target keep the old name so preferences and Space names survive; don't rename them.
+The app is Dispaces: `Dispaces.app`, SwiftPM package, executable target and process `Dispaces`. Only the bundle ID `io.github.kosrodka.SpacesBar` (also the preferences domain and log subsystem) keeps the old name, so preferences and Space names survive; don't rename it.
 
 A small macOS menu-bar app that shows every Space per display in a floating bar and switches Space on click. Owner: Kamil Ośródka (kosrodka).
 
@@ -24,7 +24,7 @@ A small macOS menu-bar app that shows every Space per display in a floating bar 
 
 ## Layout
 - `Sources/SpacesCore`: pure logic (Foundation only) with unit tests in `Tests/SpacesCoreTests`. Put anything that can be tested here.
-- `Sources/SpacesBar`: AppKit glue (panel, views, menu, key posting, monitor).
+- `Sources/Dispaces`: AppKit glue (panel, views, menu, key posting, monitor).
 - `Sources/CGSPrivate`: C header for the private read-only call.
 - `Assets/`: app icon (`AppIcon.svg`, rendered to `AppIcon.iconset` PNGs that `bundle.sh` turns into `AppIcon.icns`) and the menu bar glyph's source (`MenuBarGlyph.svg`, drawn in code by `MenuBarGlyph.swift`).
 - `scripts/`: `bundle.sh` (build + sign), `security-check.sh` (binary checks), `source-check.sh` (forbidden APIs).
