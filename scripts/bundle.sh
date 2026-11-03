@@ -26,8 +26,7 @@ BIN_DIR="$(swift build -c release "${ARCH_FLAGS[@]}" --show-bin-path)"
 APP="build/Dispaces.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-# The SwiftPM target is still called SpacesBar; the app and its process are Dispaces.
-cp "$BIN_DIR/SpacesBar" "$APP/Contents/MacOS/Dispaces"
+cp "$BIN_DIR/Dispaces" "$APP/Contents/MacOS/Dispaces"
 # App icon: PNGs rendered from Assets/AppIcon.svg.
 iconutil -c icns Assets/AppIcon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
 

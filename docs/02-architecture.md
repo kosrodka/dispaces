@@ -46,7 +46,7 @@ The keyboard-shortcut method has one more advantage: the app can **read** your s
 ```
 ┌───────────────────────────── Dispaces.app (one process, no network) ────────────────────────────┐
 │                                                                                                   │
-│  AppKit layer (target: SpacesBar)                         Pure logic (target: SpacesCore)         │
+│  AppKit layer (target: Dispaces)                          Pure logic (target: SpacesCore)         │
 │                                                                                                   │
 │  AppDelegate ── owns everything, wires callbacks          Model        Snapshot / Display / Space │
 │     │                                                     SnapshotParser  raw dictionaries → Model│
