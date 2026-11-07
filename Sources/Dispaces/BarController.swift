@@ -1,272 +1,16 @@
 import AppKit
 import SpacesCore
 
-/// A floating panel that never takes focus: clicking it doesn't activate the app,
-/// doesn't create a Stage Manager stage, and doesn't steal your typing.
-@MainActor
-final class BarPanel: FloatingPanel {
-    init() {
-        super.init(size: NSSize(width: 200, height: Metrics.barHeight))
-        hidesOnDeactivate = false
-        becomesKeyOnlyIfNeeded = true
-        isMovableByWindowBackground = false
-        isExcludedFromWindowsMenu = true
-        animationBehavior = .none
-    }
-}
-
-/// One floating bar, shown on one display, holding that display's Spaces.
-///
-/// Left to right: control buttons (show/hide Spaces, lock, refresh), the
-/// display's name, its Space tiles, and the amber "!" when setup needs attention.
-/// Its edges can be dragged to resize it; tiles and text scale to fit.
-@MainActor
-final class DisplayBar {
-    /// Display identifier, or `BarController.unreadableKey`.
-    let key: String
-    let panel = BarPanel()
-    private let background = BarBackgroundView(frame: .zero)
-    private(set) var model: BarModel?
-    private var placed = false
-
-    init(key: String) {
-        self.key = key
-        panel.contentView = background
-    }
-
-    var layoutKey: String { BarController.layoutKey(key) }
-
-    func close() {
-        panel.orderOut(nil)
-        panel.close()
-    }
-
-    /// Lays out the bar and places it. Returns false when nothing changed.
-    @discardableResult
-    func update(_ model: BarModel, screen: NSScreen?, controller: BarController, force: Bool = false) -> Bool {
-        guard force || model != self.model else { return false }
-        self.model = model
-        background.glowing = model.glowing
-        let size = layout(model, screen: screen, controller: controller)
-        place(size: size, screen: screen, controller: controller)
-        return true
-    }
-
-    /// Rebuilds the bar's contents for `model`. Returns the bar's size.
-    private func layout(_ model: BarModel, screen: NSScreen?, controller: BarController) -> CGSize {
-        background.subviews.forEach { $0.removeFromSuperview() }
-        background.onDrag = dragHandler(controller)
-        background.onResize = { [weak self, weak controller] event, edges in
-            guard let self, let controller else { return }
-            controller.resize(self, event, edges: edges)
-        }
-        background.onResetSize = { [weak self, weak controller] in
-            guard let self, let controller else { return }
-            controller.resetSize(self)
-        }
-        background.canResize = !model.locked && !model.collapsed && model.group != nil
-
-        let heights = BarLayout.heights
-        let height = model.size.map { min(max($0.height, CGFloat(heights.lowerBound)), CGFloat(heights.upperBound)) } ?? Metrics.barHeight
-        let scale = height / Metrics.barHeight
-        let tileHeight = height - (Metrics.barHeight - Metrics.tileHeight)
-        let tileY = (height - tileHeight) / 2
-        let controlY = (height - Metrics.controlSize) / 2
-        let screenWidth = screen?.visibleFrame.width ?? 1440
-        let showWarning = model.warning || model.group == nil
-        let warningWidth = showWarning ? tileHeight + 4 : 0
-        var x = Metrics.inset
-
-        // Control section.
-        let controls: [(String, String, () -> Void)] = [
-            (model.collapsed ? "eye.slash" : "eye",
-             model.collapsed ? "Show Spaces" : "Hide Spaces",
-             { [weak controller, key] in controller?.toggleCollapsed(key) }),
-            (model.locked ? "lock.fill" : "lock.open",
-             model.locked ? "Unlock this bar" : "Lock this bar's position and size",
-             { [weak controller, key] in controller?.toggleLock(key) }),
-            ("arrow.clockwise", "Refresh now",
-             { [weak controller] in controller?.refreshNow() }),
-        ]
-        for (symbol, label, action) in controls {
-            let button = ControlButton(symbol: symbol, label: label)
-            button.frame = NSRect(x: x, y: controlY, width: Metrics.controlSize, height: Metrics.controlSize)
-            button.onClick = action
-            background.addSubview(button)
-            x += Metrics.controlSize + Metrics.controlGap
-        }
-        x += Metrics.groupPadding - Metrics.controlGap
-
-        if !model.collapsed {
-            background.addSubview(DividerView(frame: NSRect(x: x, y: 7, width: 1, height: height - 14)))
-            x += 1 + Metrics.groupPadding
-
-            if let group = model.group {
-                let label = DisplayLabelView(text: group.label, scale: scale)
-                label.frame = NSRect(x: x, y: tileY, width: label.preferredWidth, height: tileHeight)
-                label.canReset = controller.hasCustomName(displayKey: group.displayKey)
-                label.onRename = { [weak controller] in controller?.renameDisplay(key: group.displayKey) }
-                label.onReset = { [weak controller] in controller?.resetDisplay(key: group.displayKey) }
-                label.onDrag = dragHandler(controller)
-                background.addSubview(label)
-                x += label.preferredWidth + Metrics.gap
-
-                // Disconnected displays' Spaces follow this display's own, each under its old name.
-                let ghostLabels = group.ghosts.map { DisplayLabelView(text: $0.label, scale: scale, ghost: true) }
-                let ghostSpace = ghostLabels.reduce(0) { $0 + $1.preferredWidth + Metrics.groupPadding + Metrics.gap }
-                let allTiles = group.tiles + group.ghosts.flatMap(\.tiles)
-                let (widths, compact) = tileWidths(allTiles, scale: scale, from: x,
-                                                   reserved: warningWidth + Metrics.inset + ghostSpace,
-                                                   target: model.size.map { min($0.width, screenWidth) },
-                                                   screenWidth: screenWidth)
-                // Index of the first tile of each ghost group, and its label.
-                var ghostStarts: [Int: DisplayLabelView] = [:]
-                var start = group.tiles.count
-                for (ghost, label) in zip(group.ghosts, ghostLabels) {
-                    ghostStarts[start] = label
-                    start += ghost.tiles.count
-                }
-                for (index, (tile, width)) in zip(allTiles, widths).enumerated() {
-                    if let label = ghostStarts[index] {
-                        x += Metrics.groupPadding
-                        label.frame = NSRect(x: x, y: tileY, width: label.preferredWidth, height: tileHeight)
-                        label.onDrag = dragHandler(controller)
-                        background.addSubview(label)
-                        x += label.preferredWidth + Metrics.gap
-                    }
-                    let view = TileView(model: tile, compact: compact, scale: scale)
-                    view.frame = NSRect(x: x, y: tileY, width: width, height: tileHeight)
-                    view.onClick = { [weak controller] in controller?.click(tile.spaceID) }
-                    view.onRename = { [weak controller] in controller?.renameSpace(id: tile.spaceID) }
-                    view.onHover = { [weak controller, weak view] inside in
-                        guard let view else { return }
-                        controller?.hover(view, inside: inside)
-                    }
-                    // The hover column shows the full name instead.
-                    view.toolTip = controller.showsAppsOnHover ? nil : tile.name
-                    background.addSubview(view)
-                    x += width + Metrics.gap
-                }
-                x -= Metrics.gap
-            } else {
-                let label = DisplayLabelView(text: "Can't read Spaces", scale: scale)
-                label.frame = NSRect(x: x, y: tileY, width: label.preferredWidth, height: tileHeight)
-                background.addSubview(label)
-                x += label.preferredWidth
-            }
-        }
-
-        if showWarning {
-            let warning = WarningView(frame: NSRect(x: x + 4, y: tileY, width: tileHeight, height: tileHeight))
-            warning.onClick = { [weak controller] in controller?.onWarningClick?() }
-            background.addSubview(warning)
-            x += warningWidth
-        }
-        x += Metrics.inset
-        return CGSize(width: max(x, CGFloat(BarGeometry.minBarWidth)), height: height)
-    }
-
-    /// Tile widths and whether tiles are compact (see `BarGeometry.tileWidths`).
-    private func tileWidths(_ tiles: [TileModel], scale: CGFloat, from start: CGFloat, reserved: CGFloat,
-                            target: CGFloat?, screenWidth: CGFloat) -> ([CGFloat], Bool) {
-        let result = BarGeometry.tileWidths(
-            natural: tiles.map { Double(TileView.width(for: $0, compact: false, scale: scale)) },
-            compact: { tiles.map { Double(TileView.width(for: $0, compact: true, scale: scale)) } },
-            start: Double(start), reserved: Double(reserved), gap: Double(Metrics.gap),
-            minTile: Double(Metrics.minTile * scale), target: target.map { Double($0) },
-            screenWidth: Double(screenWidth))
-        return (result.widths.map { CGFloat($0) }, result.compact)
-    }
-
-    /// Dragging a view with this handler moves the bar (unless it's locked).
-    private func dragHandler(_ controller: BarController) -> (NSEvent) -> Void {
-        { [weak self, weak controller] event in
-            guard let self, let controller else { return }
-            controller.drag(self, event)
-        }
-    }
-
-    /// Sizes the panel and keeps it on its own display.
-    private func place(size: CGSize, screen: NSScreen?, controller: BarController) {
-        let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        var topLeft: NSPoint
-        if placed {
-            topLeft = NSPoint(x: panel.frame.minX, y: panel.frame.maxY)
-        } else if let offset = controller.savedOffset(for: layoutKey) {
-            topLeft = NSPoint(x: visible.minX + offset.fromLeft, y: visible.maxY - offset.fromTop)
-        } else {
-            // Default: centred near the top of its display.
-            topLeft = NSPoint(x: visible.midX - size.width / 2, y: visible.maxY - 8)
-        }
-        placed = true
-        let frame = NSRect(x: topLeft.x, y: topLeft.y - size.height, width: size.width, height: size.height)
-        panel.setFrame(BarGeometry.clamp(.init(frame), to: .init(visible)).nsRect, display: true)
-    }
-
-    /// Follows the mouse while an edge is dragged, keeping the opposite edges
-    /// still. Returns the final size, or nil if the bar can't be resized.
-    func trackResize(_ event: NSEvent, edges: ResizeEdges, screen: NSScreen?, controller: BarController) -> CGSize? {
-        guard let model, model.group != nil, !model.collapsed else { return nil }
-        let start = NSEvent.mouseLocation
-        let startFrame = panel.frame
-        let visible = screen?.visibleFrame ?? startFrame
-        var current = model
-        background.activeResize = edges
-        defer { background.activeResize = [] }
-        panel.trackEvents(matching: [.leftMouseDragged, .leftMouseUp], timeout: NSEvent.foreverDuration,
-                          mode: .eventTracking) { event, stop in
-            guard let event else {
-                stop.pointee = true
-                return
-            }
-            // Keep the resize cursor while dragging (see BarBackgroundView).
-            BarBackgroundView.cursor(for: edges).set()
-            let point = NSEvent.mouseLocation
-            let wanted = BarGeometry.resizedSize(of: .init(startFrame), edges: edges,
-                                                 dx: Double(point.x - start.x), dy: Double(point.y - start.y))
-            current.size = CGSize(width: wanted.width, height: wanted.height)
-            self.model = current
-            let size = self.layout(current, screen: screen, controller: controller)
-            // The edges not being dragged stay where they were.
-            let frame = BarGeometry.resizedFrame(from: .init(startFrame), width: Double(size.width),
-                                                 height: Double(size.height), edges: edges)
-            self.panel.setFrame(BarGeometry.clamp(frame, to: .init(visible)).nsRect, display: true)
-            if event.type == .leftMouseUp { stop.pointee = true }
-        }
-        return current.size.map { CGSize(width: panel.frame.width, height: $0.height) }
-    }
-
-    /// The tile view under a point in screen coordinates, if the bar is showing one there.
-    func tileView(at screenPoint: NSPoint) -> TileView? {
-        guard panel.isVisible, panel.frame.contains(screenPoint) else { return nil }
-        let point = background.convert(panel.convertPoint(fromScreen: screenPoint), from: nil)
-        return background.subviews.lazy.compactMap { $0 as? TileView }.first { $0.frame.contains(point) }
-    }
-
-    /// The tile under a point in screen coordinates, if the bar is showing one there.
-    func tile(at screenPoint: NSPoint) -> TileModel? {
-        tileView(at: screenPoint)?.model
-    }
-
-    /// After a drag or resize: snap back onto its own display and remember the spot.
-    func finishDrag(screen: NSScreen?) -> BarLayout.Offset? {
-        guard let visible = screen?.visibleFrame else { return nil }
-        let frame = BarGeometry.clamp(.init(panel.frame), to: .init(visible)).nsRect
-        if frame != panel.frame { panel.setFrame(frame, display: true) }
-        return BarLayout.Offset(fromLeft: Double(frame.minX - visible.minX), fromTop: Double(visible.maxY - frame.maxY))
-    }
-}
-
-/// Keeps one bar per display, each on its own display, in sync with the snapshot.
+/// Keeps the Spaces in the menu bar in sync with the snapshot: one menu bar
+/// item with a square tile per Space, each display's Spaces as a group, the
+/// displays in their left-to-right arrangement. When macOS isn't showing the
+/// item (no room beside the notch, a hidden menu bar, switched off in System
+/// Settings), a small floating bar with the same tiles stands in, unless the
+/// user turned that off.
 @MainActor
 final class BarController {
-    /// Key of the single bar shown when the Space list can't be read.
-    static let unreadableKey = "unreadable"
-
-    /// Key of a bar's entries in `BarLayout`.
-    static func layoutKey(_ key: String) -> String { "bar:" + key }
-
-    private var bars: [String: DisplayBar] = [:]
+    private let menuItem = MenuBarItem()
+    private let fallback = FallbackBar()
     private let messagePanel = MessagePanel()
     private let appsPanel = AppsPanel()
     /// The tile whose apps are showing (or about to), and the pending show.
@@ -277,45 +21,57 @@ final class BarController {
     private let monitor: SpaceMonitor
 
     private var snapshot = Snapshot.empty
+    private var content = TilesContent()
     private var failedSpaceID: UInt64?
     private var failedClear: DispatchWorkItem?
-    /// Option-drag: the tile a held window is resting on, and the bar it's over.
+    /// Option-drag: the tile a held window is resting on.
     private var arming = DragArming()
-    private var glowingBar: String?
     private var dragTimer: Timer?
+    /// Checks every few seconds whether the menu bar item is on screen.
+    private var fallbackTimer: Timer?
+    private var fallbackWork: DispatchWorkItem?
+    /// The item must be gone this long before the fallback bar shows, so the
+    /// menu bar sliding in and out doesn't make it flicker.
+    static let fallbackDelay: TimeInterval = 1
     var needsAttention: () -> Bool = { false }
     var onWarningClick: (() -> Void)?
+    /// Open the app's menu under a view; the Space that was right-clicked, if any.
+    var onMenu: ((UInt64?, NSView) -> Void)?
 
     init(prefs: Preferences, monitor: SpaceMonitor, switcher: SpaceSwitcher) {
         self.prefs = prefs
         self.monitor = monitor
         self.switcher = switcher
         appsPanel.onExit = { [weak self] in self?.hideAppsSoon() }
-    }
-
-    var isVisible: Bool { !prefs.barHidden }
-
-    func setVisible(_ visible: Bool) {
-        prefs.barHidden = !visible
-        for bar in bars.values {
-            if visible { bar.panel.orderFrontRegardless() } else { bar.panel.orderOut(nil) }
+        for view in [menuItem.view, fallback.tiles] {
+            view.onClick = { [weak self] id in self?.click(id) }
+            view.onWarning = { [weak self] in self?.onWarningClick?() }
+            view.onMenu = { [weak self, weak view] id, _ in
+                guard let self, let view else { return }
+                self.hideApps()
+                self.onMenu?(id, view)
+            }
+            view.onHover = { [weak self] tile, inside in self?.hover(tile, inside: inside) }
         }
-        if !visible {
-            messagePanel.orderOut(nil)
-            hideApps()
+        menuItem.onVisibilityChange = { [weak self] in self?.checkFallback() }
+        let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkFallback() }
         }
+        timer.tolerance = 1
+        RunLoop.main.add(timer, forMode: .common)
+        fallbackTimer = timer
     }
 
     // MARK: Model
 
     func show(_ snapshot: Snapshot) {
         self.snapshot = snapshot
-        rebuild(force: false)
+        rebuild()
         onChange?()
     }
 
     func redraw() {
-        rebuild(force: true)
+        rebuild()
         onChange?()
     }
 
@@ -334,7 +90,7 @@ final class BarController {
         }
     }
 
-    /// Takes a Space out of a disconnected display's group; it joins the bar of
+    /// Takes a Space out of a disconnected display's group; it joins the group of
     /// the display it's on. Only the app's own memory changes.
     /// Returns where the Space was in the group (for undo), or nil if nothing changed.
     @discardableResult
@@ -355,7 +111,7 @@ final class BarController {
         redraw()
     }
 
-    /// Whether a display's first Space is shown on its bar and in the Manage window.
+    /// Whether a display's first Space is shown in the menu bar and in the Manage window.
     func showsFirstSpace(_ identifier: String) -> Bool {
         identifier == Display.combinedIdentifier
             || prefs.firstSpaces.isShown(identifier)
@@ -366,8 +122,8 @@ final class BarController {
         redraw()
     }
 
-    /// Tiles shown outside the bars (the Manage window), for the hover column.
-    var extraTileView: ((NSPoint) -> TileView?)?
+    /// Tiles shown outside the menu bar (the Manage window), for the hover column.
+    var extraTile: ((NSPoint) -> HoverTile?)?
 
     /// Forgets a disconnected display; its Spaces join the display they're on.
     /// Returns what was forgotten (for undo), or nil if nothing changed.
@@ -389,21 +145,12 @@ final class BarController {
         redraw()
     }
 
-    private func rebuild(force: Bool) {
-        let warning = needsAttention()
-        var wanted: [String: (BarModel, NSScreen?)] = [:]
-
+    private func rebuild() {
+        var content = TilesContent()
+        content.warning = needsAttention() || snapshot.isEmpty
         if snapshot.isEmpty {
-            let key = Self.layoutKey(Self.unreadableKey)
-            wanted[Self.unreadableKey] = (BarModel(group: nil, warning: true, collapsed: false,
-                                                   locked: prefs.layout.isLocked(key)),
-                                         NSScreen.main ?? NSScreen.screens.first)
+            content.summary = "Dispaces: can't read the Space list"
         } else {
-            if prefs.takeLegacyLock() {
-                prefs.updateLayout { layout in
-                    for display in snapshot.displays { layout.setLocked(true, for: Self.layoutKey(display.identifier)) }
-                }
-            }
             let names = prefs.names
             let now = Date().timeIntervalSince1970
             prefs.updateMemory { memory in
@@ -412,35 +159,39 @@ final class BarController {
                               spaceName: { names.name(for: $0) }, now: now)
             }
             let focusedDisplay = snapshot.focusedDisplay?.identifier ?? Screens.focusedIdentifier()
-            for display in snapshot.displays where !display.spaces.isEmpty {
+            for display in orderedDisplays() where !display.spaces.isEmpty {
                 let onFocused = snapshot.displays.count == 1 || Screens.matches(focusedDisplay, display)
                 let group = groupModel(for: display, names: names, onFocused: onFocused)
-                let key = display.identifier
-                let layoutKey = Self.layoutKey(key)
-                let size = prefs.layout.sizes[layoutKey].map { CGSize(width: $0.width, height: $0.height) }
-                let model = BarModel(group: group, warning: warning,
-                                     collapsed: prefs.layout.isCollapsed(layoutKey),
-                                     locked: prefs.layout.isLocked(layoutKey), size: size,
-                                     glowing: glowingBar == key)
-                wanted[key] = (model, Self.screen(for: display))
+                content.runs.append(.init(count: group.tiles.count, spacing: .group))
+                content.entries += group.tiles.map { .init(tile: $0, dimmed: false) }
+                for ghost in group.ghosts {
+                    content.runs.append(.init(count: ghost.tiles.count, spacing: .subgroup))
+                    content.entries += ghost.tiles.map { .init(tile: $0, dimmed: true) }
+                }
             }
+            let current = content.entries.filter { $0.tile.state != .normal }.map(\.tile.name)
+            content.summary = "Dispaces Spaces" + (current.isEmpty ? "" : ", current: " + current.joined(separator: ", "))
         }
-
-        // Remove bars for displays that are gone.
-        for (key, bar) in bars where wanted[key] == nil {
-            bar.close()
-            bars[key] = nil
-        }
-        for (key, (model, screen)) in wanted {
-            let bar = bars[key] ?? DisplayBar(key: key)
-            bars[key] = bar
-            bar.update(model, screen: screen, controller: self, force: force)
-            if !prefs.barHidden && !bar.panel.isVisible { bar.panel.orderFrontRegardless() }
-        }
-        // Tiles were rebuilt: drop the column if the pointer isn't on that tile any more.
+        self.content = content
+        // With apps on hover, the column shows the Space's name instead of a tooltip.
+        let tips = !prefs.showAppsOnHover
+        menuItem.update(content, showsToolTips: tips)
+        fallback.update(content, showsToolTips: tips)
+        // Tiles were redrawn: drop the column if the pointer isn't on that tile any more.
         if hoveredSpaceID != nil, !pointerOnApps() {
             hideApps()
         }
+        checkFallback()
+    }
+
+    /// Displays left to right, as they're arranged in System Settings › Displays.
+    private func orderedDisplays() -> [Display] {
+        let far = CGFloat.greatestFiniteMagnitude
+        return snapshot.displays.enumerated().sorted { a, b in
+            let ax = Screens.screen(for: a.element)?.frame.minX ?? far
+            let bx = Screens.screen(for: b.element)?.frame.minX ?? far
+            return ax != bx ? ax < bx : a.offset < b.offset
+        }.map(\.element)
     }
 
     private func groupModel(for display: Display, names: Names, onFocused: Bool) -> GroupModel {
@@ -492,82 +243,60 @@ final class BarController {
         space.ownerPID.flatMap { NSRunningApplication(processIdentifier: $0)?.localizedName }
     }
 
-    /// The screen a display's bar goes on.
-    private static func screen(for display: Display) -> NSScreen? {
-        Screens.screen(for: display) ?? NSScreen.main
-    }
-
-    // MARK: Called by the bars
-
-    func savedOffset(for layoutKey: String) -> BarLayout.Offset? {
-        prefs.layout.offsets[layoutKey]
-    }
-
     func hasCustomName(displayKey: String) -> Bool {
         prefs.names.displays[displayKey] != nil
     }
 
-    func drag(_ bar: DisplayBar, _ event: NSEvent) {
-        guard !prefs.layout.isLocked(bar.layoutKey) else { return }
-        bar.panel.performDrag(with: event)
-        let screen = screen(forBar: bar.key)
-        if let offset = bar.finishDrag(screen: screen) {
-            prefs.updateLayout { $0.setOffset(fromLeft: offset.fromLeft, fromTop: offset.fromTop, for: bar.layoutKey) }
-        }
-    }
-
-    func resize(_ bar: DisplayBar, _ event: NSEvent, edges: ResizeEdges) {
-        guard !prefs.layout.isLocked(bar.layoutKey) else { return }
-        let screen = screen(forBar: bar.key)
-        guard let size = bar.trackResize(event, edges: edges, screen: screen, controller: self) else { return }
-        let offset = bar.finishDrag(screen: screen)
-        prefs.updateLayout { layout in
-            layout.setSize(BarLayout.Size(width: Double(size.width), height: Double(size.height)), for: bar.layoutKey)
-            if let offset { layout.setOffset(fromLeft: offset.fromLeft, fromTop: offset.fromTop, for: bar.layoutKey) }
-        }
-        redraw()
-    }
-
-    /// Back to the size that just fits the bar's contents.
-    func resetSize(_ bar: DisplayBar) {
-        guard !prefs.layout.isLocked(bar.layoutKey) else { return }
-        prefs.updateLayout { $0.setSize(nil, for: bar.layoutKey) }
-        redraw()
-    }
-
-    private func screen(forBar key: String) -> NSScreen? {
-        snapshot.displays.first { $0.identifier == key }.flatMap(Self.screen(for:)) ?? NSScreen.main
-    }
-
-    func toggleCollapsed(_ key: String) {
-        let layoutKey = Self.layoutKey(key)
-        let collapse = !prefs.layout.isCollapsed(layoutKey)
-        prefs.updateLayout { $0.setCollapsed(collapse, for: layoutKey) }
-        redraw()
-    }
-
-    /// Locks or unlocks one bar's position and size.
-    func toggleLock(_ key: String) {
-        let layoutKey = Self.layoutKey(key)
-        let lock = !prefs.layout.isLocked(layoutKey)
-        prefs.updateLayout { $0.setLocked(lock, for: layoutKey) }
-        redraw()
-    }
-
-    /// True when every bar on screen is locked.
-    var allLocked: Bool {
-        !bars.isEmpty && bars.keys.allSatisfy { prefs.layout.isLocked(Self.layoutKey($0)) }
-    }
-
-    func setAllLocked(_ lock: Bool) {
-        prefs.updateLayout { layout in
-            for key in bars.keys { layout.setLocked(lock, for: Self.layoutKey(key)) }
-        }
-        redraw()
-    }
-
     func refreshNow() {
         monitor.refresh()
+    }
+
+    /// The name shown for a Space (for the menu's Rename item).
+    func spaceName(_ spaceID: UInt64) -> String? {
+        content.entries.first { $0.tile.spaceID == spaceID }?.tile.name
+    }
+
+    // MARK: Fallback bar
+
+    var showsFallback: Bool { prefs.fallbackBar }
+
+    func setShowsFallback(_ on: Bool) {
+        prefs.fallbackBar = on
+        checkFallback()
+    }
+
+    /// Shows the fallback bar once the menu bar item has been off screen for
+    /// `fallbackDelay`; hides it as soon as the item is back.
+    private func checkFallback() {
+        guard prefs.fallbackBar, !menuItem.isShowing else {
+            fallbackWork?.cancel()
+            fallbackWork = nil
+            if fallback.isVisible {
+                fallback.orderOut(nil)
+                if let id = hoveredSpaceID, fallback.tiles.content.entries.contains(where: { $0.tile.spaceID == id }) {
+                    hideApps()
+                }
+            }
+            return
+        }
+        guard !fallback.isVisible, fallbackWork == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.fallbackWork = nil
+                if self.prefs.fallbackBar && !self.menuItem.isShowing { self.fallback.showBar() }
+            }
+        }
+        fallbackWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.fallbackDelay, execute: work)
+    }
+
+    /// The tile rows on screen now: the menu bar item's and, while shown, the fallback bar's.
+    private var visibleRows: [SpaceTilesView] {
+        var rows: [SpaceTilesView] = []
+        if menuItem.isShowing { rows.append(menuItem.view) }
+        if fallback.isVisible { rows.append(fallback.tiles) }
+        return rows
     }
 
     // MARK: Apps on hover
@@ -580,10 +309,10 @@ final class BarController {
         redraw()
     }
 
-    /// Shows the apps on a tile's Space after a short rest, so sweeping across the bar stays quiet.
+    /// Shows the apps on a tile's Space after a short rest, so sweeping across the tiles stays quiet.
     /// The column stays while the pointer is on the tile or on the column.
-    func hover(_ view: TileView, inside: Bool) {
-        let spaceID = view.model.spaceID
+    func hover(_ tile: HoverTile, inside: Bool) {
+        let spaceID = tile.spaceID
         guard inside else {
             if hoveredSpaceID == spaceID { hideAppsSoon() }
             return
@@ -593,15 +322,13 @@ final class BarController {
         hideApps()
         guard prefs.showAppsOnHover, NSEvent.pressedMouseButtons == 0 else { return }
         hoveredSpaceID = spaceID
-        let title = view.model.name
         let work = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.hoveredSpaceID == spaceID, NSEvent.pressedMouseButtons == 0,
-                      let tile = self.tileView(at: NSEvent.mouseLocation), tile.model.spaceID == spaceID,
-                      let frame = tile.screenFrame else { return }
+                      let tile = self.hoverTile(at: NSEvent.mouseLocation), tile.spaceID == spaceID else { return }
                 self.appsPanel.onPick = { [weak self] app in self?.bringToFront(app, on: spaceID) }
-                self.appsPanel.show(title: title, apps: SpaceAppsReader.apps(on: spaceID), tile: frame,
-                                    screen: tile.window?.screen)
+                self.appsPanel.show(title: tile.name, apps: SpaceAppsReader.apps(on: spaceID), tile: tile.frame,
+                                    screen: tile.screen)
             }
         }
         hoverWork = work
@@ -611,7 +338,7 @@ final class BarController {
     /// True while the pointer is on the hovered tile or on its apps column.
     private func pointerOnApps() -> Bool {
         let point = NSEvent.mouseLocation
-        return appsPanel.contains(point) || (hoveredSpaceID != nil && tileView(at: point)?.model.spaceID == hoveredSpaceID)
+        return appsPanel.contains(point) || (hoveredSpaceID != nil && hoverTile(at: point)?.spaceID == hoveredSpaceID)
     }
 
     /// Hides the column unless the pointer is on its way from the tile into it (or back).
@@ -635,31 +362,31 @@ final class BarController {
         }
     }
 
-    /// Soft restart after a display is connected or disconnected: throws every
-    /// bar and passing state away and builds the bars again from a fresh read,
-    /// as relaunching the app would, without launching anything.
-    func resetBars() {
+    /// Soft restart after a display is connected or disconnected: throws all
+    /// passing state away and draws the tiles again from a fresh read, as
+    /// relaunching the app would, without launching anything.
+    func reset() {
         hideApps()
         messagePanel.orderOut(nil)
         failedClear?.cancel()
         failedClear = nil
         failedSpaceID = nil
         arming = DragArming()
-        glowingBar = nil
-        for bar in bars.values { bar.close() }
-        bars.removeAll()
+        fallback.orderOut(nil)
+        fallbackWork?.cancel()
+        fallbackWork = nil
         monitor.refresh()
     }
 
-    private func hideApps() {
+    func hideApps() {
         hoverWork?.cancel()
         hoverWork = nil
         hoveredSpaceID = nil
         appsPanel.orderOut(nil)
     }
 
-    private func tileView(at point: NSPoint) -> TileView? {
-        bars.values.lazy.compactMap { $0.tileView(at: point) }.first ?? extraTileView?(point)
+    private func hoverTile(at point: NSPoint) -> HoverTile? {
+        visibleRows.lazy.compactMap { $0.hoverTile(atScreen: point) }.first ?? extraTile?(point)
     }
 
     /// Switches to a Space; `switched` runs once macOS has made it current.
@@ -670,7 +397,7 @@ final class BarController {
         }
     }
 
-    /// Switches to a Space; if that fails, marks its tile and says why under the bar.
+    /// Switches to a Space; if that fails, marks its tile and says why under the tiles.
     @discardableResult
     private func switchSpace(_ spaceID: UInt64) async -> SpaceSwitcher.Outcome {
         let outcome = await switcher.switchTo(spaceID: spaceID)
@@ -684,15 +411,14 @@ final class BarController {
     ///
     /// Only reads the pointer position, mouse buttons and modifier keys through
     /// public `NSEvent` class properties: no event tap, no global monitor, no
-    /// permission. The user physically holds the window; when it rests on a
-    /// desktop tile, the app presses that desktop's shortcut and macOS carries
-    /// the held window along. The app never touches the window.
+    /// permission. The user physically holds the window; when the pointer rests
+    /// on a desktop tile, the app presses that desktop's shortcut and macOS
+    /// carries the held window along. The app never touches the window.
     func setDragWatching(_ on: Bool) {
         dragTimer?.invalidate()
         dragTimer = nil
-        if arming.armedSpaceID != nil || glowingBar != nil {
+        if arming.armedSpaceID != nil {
             arming = DragArming()
-            glowingBar = nil
             redraw()
         }
         guard on else { return }
@@ -706,29 +432,23 @@ final class BarController {
 
     private func dragTick() {
         let holding = NSEvent.pressedMouseButtons & 1 != 0 && NSEvent.modifierFlags.contains(.option)
-        let point = NSEvent.mouseLocation
-        var barKey: String?
         var space: UInt64?
-        if holding && !prefs.barHidden {
-            for (key, bar) in bars where bar.panel.isVisible && bar.panel.frame.contains(point) {
-                barKey = key
-                if let tile = bar.tile(at: point), !tile.isFullScreen { space = tile.spaceID }
-                break
-            }
+        let point = NSEvent.mouseLocation
+        if holding, let tile = visibleRows.lazy.compactMap({ $0.hoverTile(atScreen: point) }).first,
+           content.entries.contains(where: { $0.tile.spaceID == tile.spaceID && !$0.tile.isFullScreen }) {
+            space = tile.spaceID
         }
-        let before = (arming.armedSpaceID, glowingBar)
+        let before = arming.armedSpaceID
         let fire = arming.update(holding: holding, spaceUnderPointer: space, now: ProcessInfo.processInfo.systemUptime)
-        glowingBar = barKey
-        if before != (arming.armedSpaceID, glowingBar) { redraw() }
+        if before != arming.armedSpaceID { redraw() }
         if let fire { click(fire) }
     }
 
     private func flashFailure(spaceID: UInt64, message: String) {
         failedSpaceID = spaceID
         redraw()
-        let owner = snapshot.locate(spaceID: spaceID)?.display.identifier
-        let anchor = owner.flatMap { bars[$0] } ?? bars.values.first
-        if let anchor { messagePanel.show(message, below: anchor.panel.frame) }
+        let anchor = fallback.isVisible ? fallback.frame : menuItem.view.screenFrame
+        if let anchor { messagePanel.show(message, below: anchor) }
         failedClear?.cancel()
         let work = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated {
@@ -804,7 +524,7 @@ enum NamePrompt {
     }
 }
 
-/// A short message under the bar, e.g. why a switch failed. Hides itself.
+/// A short message under the tiles, e.g. why a switch failed. Hides itself.
 @MainActor
 final class MessagePanel: FloatingPanel {
     private let label = NSTextField(wrappingLabelWithString: "")
@@ -833,7 +553,11 @@ final class MessagePanel: FloatingPanel {
         label.preferredMaxLayoutWidth = width - 24
         let height = ceil(label.intrinsicContentSize.height) + 18
         label.frame = NSRect(x: 12, y: 9, width: width - 24, height: height - 18)
-        let x = barFrame.midX - width / 2
+        var x = barFrame.midX - width / 2
+        let anchor = NSPoint(x: barFrame.midX, y: barFrame.midY)
+        if let visible = NSScreen.screens.first(where: { $0.frame.contains(anchor) })?.visibleFrame {
+            x = min(max(x, visible.minX + 6), visible.maxX - width - 6)
+        }
         setFrame(NSRect(x: x, y: barFrame.minY - height - 6, width: width, height: height), display: true)
         orderFrontRegardless()
         NSAccessibility.post(element: label, notification: .announcementRequested,

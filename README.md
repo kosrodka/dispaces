@@ -1,9 +1,9 @@
 # Dispaces
 
-Manage macOS Spaces (Desktops): a small floating bar for macOS 26 and 27 that shows the Spaces of every display, highlights the current one, lets you name displays and Spaces, and switches Space when you click a tile.
+Manage macOS Spaces (Desktops): a row of small square tiles in the macOS menu bar (macOS 26 and 27), one per Space and grouped by display, with the current one highlighted. Click a tile to switch Space; name displays and Spaces. When macOS hides the menu bar item, a small floating bar stands in.
 
 ```
- STUDIO DISPLAY [1 HOME][2 MUSIC][3 TECH][4 MAIL] │ MACBOOK PRO [5 CHAT][6 NOTES][FS Safari]
+ [1][2][3][4]   [5][6][FS]   🔋  Wi-Fi  Sat 7 Nov 17:20
 ```
 
 - No network access, no third-party code, no auto-update.
@@ -19,7 +19,7 @@ Manage macOS Spaces (Desktops): a small floating bar for macOS 26 and 27 that sh
 | [CI/CD](docs/05-ci-cd.md) | Repository, pipelines, releases |
 | [Operations](docs/06-operations.md) | Install, set up, update, troubleshoot, uninstall, pen tests |
 | [Pen-test report](docs/07-pen-test-report.md) | Results |
-| [User manual](docs/08-user-manual.md) | How to use the app (also in the app: menu bar icon › Help › User manual) |
+| [User manual](docs/08-user-manual.md) | How to use the app (also in the app: right-click the tiles › Help › User manual) |
 
 Quick build (macOS 26+, Xcode 26):
 ```sh

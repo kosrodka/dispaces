@@ -9,7 +9,7 @@ import AppKit
 /// minimised and found again like any other; it goes back to menu-bar only
 /// once the last one closes.
 ///
-/// Like the bars, they show on every desktop (as Dock › Options › Assign To ›
+/// Like the menu bar, they show on every desktop (as Dock › Options › Assign To ›
 /// All Desktops would do), so switching Space never leaves them behind.
 @MainActor
 final class AppWindow: NSWindow {

@@ -9,11 +9,7 @@ final class Preferences {
     private enum Key {
         static let spaceNames = "spaceNames"
         static let displayNames = "displayNames"
-        static let barOffsets = "barOffsets"
-        static let barSizes = "barSizes"
-        static let collapsedBars = "collapsedBars"
-        static let lockedBars = "lockedBars"
-        static let barHidden = "barHidden"
+        static let fallbackBar = "fallbackBar"
         static let showAppsOnHover = "showAppsOnHover"
         static let dragWindows = "dragWindows"
         static let displayMemory = "displayMemory"
@@ -25,45 +21,19 @@ final class Preferences {
     init() {
         names = Names(storedSpaces: defaults.object(forKey: Key.spaceNames),
                       storedDisplays: defaults.object(forKey: Key.displayNames))
-        layout = BarLayout(storedOffsets: defaults.object(forKey: Key.barOffsets),
-                           storedSizes: defaults.object(forKey: Key.barSizes),
-                           storedCollapsed: defaults.object(forKey: Key.collapsedBars),
-                           storedLocked: defaults.object(forKey: Key.lockedBars))
         memory = DisplayMemory(stored: defaults.object(forKey: Key.displayMemory))
         firstSpaces = FirstSpaces(stored: defaults.object(forKey: Key.firstSpaces))
         // v0.1 kept one position for a single bar; it no longer applies.
+        // (The floating bars' later positions, sizes and locks are left as they
+        // were, unused, so going back to an older build keeps them.)
         defaults.removeObject(forKey: "barLeft")
         defaults.removeObject(forKey: "barTop")
-        // Until per-bar locks, one lock applied to every bar. Carried over once
-        // the bars are known (see `takeLegacyLock`).
-        legacyLock = defaults.object(forKey: "locked") as? Bool ?? false
-    }
-
-    private var legacyLock = false
-
-    /// True once if the old single "locked" setting was on; then forgets it.
-    func takeLegacyLock() -> Bool {
-        guard legacyLock else { return false }
-        legacyLock = false
-        defaults.removeObject(forKey: "locked")
-        return true
     }
 
     func updateNames(_ change: (inout Names) -> Void) {
         change(&names)
         defaults.set(names.spaces, forKey: Key.spaceNames)
         defaults.set(names.displays, forKey: Key.displayNames)
-    }
-
-    /// Per-display bar positions, sizes, and collapsed and locked state.
-    private(set) var layout: BarLayout
-
-    func updateLayout(_ change: (inout BarLayout) -> Void) {
-        change(&layout)
-        defaults.set(layout.storedOffsets, forKey: Key.barOffsets)
-        defaults.set(layout.storedSizes, forKey: Key.barSizes)
-        defaults.set(layout.storedCollapsed, forKey: Key.collapsedBars)
-        defaults.set(layout.storedLocked, forKey: Key.lockedBars)
     }
 
     /// Which Spaces belong to which display, including unplugged displays.
@@ -81,9 +51,10 @@ final class Preferences {
         defaults.set(firstSpaces.stored, forKey: Key.firstSpaces)
     }
 
-    var barHidden: Bool {
-        get { defaults.object(forKey: Key.barHidden) as? Bool ?? false }
-        set { defaults.set(newValue, forKey: Key.barHidden) }
+    /// "Floating bar when the menu bar item is hidden"; on unless the user turns it off.
+    var fallbackBar: Bool {
+        get { defaults.object(forKey: Key.fallbackBar) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Key.fallbackBar) }
     }
 
     /// "Show apps on hover"; on unless the user turns it off.
