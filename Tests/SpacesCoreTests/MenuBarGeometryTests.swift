@@ -15,7 +15,7 @@ final class MenuBarGeometryTests: XCTestCase {
         let layout = MenuBarGeometry.layout([.init(count: 3, spacing: .group)], warning: false, metrics: metrics)
         XCTAssertEqual(layout.tileXs, [3, 22, 41])
         XCTAssertNil(layout.warningX)
-        XCTAssertEqual(layout.width, 3 + 3 * 16 + 2 * 3 + 3)
+        XCTAssertEqual(layout.width, 60) // 3 + 3 × 16 + 2 × 3 + 3
     }
 
     func testDisplaysAndUnpluggedGroupsGetWiderGaps() {
@@ -26,7 +26,7 @@ final class MenuBarGeometryTests: XCTestCase {
         ], warning: false, metrics: metrics)
         // 3, 22 | +16+6 = 44 | +16+9 = 69
         XCTAssertEqual(layout.tileXs, [3, 22, 44, 69])
-        XCTAssertEqual(layout.width, 69 + 16 + 3)
+        XCTAssertEqual(layout.width, 88) // 69 + 16 + 3
     }
 
     func testEmptyRunsTakeNoRoom() {
@@ -44,13 +44,13 @@ final class MenuBarGeometryTests: XCTestCase {
             .init(count: 0, spacing: .group),
             .init(count: 1, spacing: .subgroup),
         ], warning: false, metrics: metrics)
-        XCTAssertEqual(layout.tileXs, [3, 3 + 16 + 9])
+        XCTAssertEqual(layout.tileXs, [3, 28]) // 3 + 16 + 9
     }
 
     func testWarningComesLast() {
         let layout = MenuBarGeometry.layout([.init(count: 1, spacing: .group)], warning: true, metrics: metrics)
-        XCTAssertEqual(layout.warningX, 3 + 16 + 9)
-        XCTAssertEqual(layout.width, 28 + 16 + 3)
+        XCTAssertEqual(layout.warningX, 28) // 3 + 16 + 9
+        XCTAssertEqual(layout.width, 47) // 28 + 16 + 3
     }
 
     func testWarningAlone() {
