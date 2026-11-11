@@ -93,9 +93,22 @@ final class SpaceTilesView: NSView {
     }
 
     private func hit(_ event: NSEvent) -> MenuBarGeometry.Hit {
-        let point = convert(event.locationInWindow, from: nil)
+        let point = localPoint(event)
         guard point.y >= 0, point.y <= bounds.height else { return .gap }
         return MenuBarGeometry.hit(x: Double(point.x), in: layout, metrics: metrics)
+    }
+
+    /// Where the pointer is, in this view. Taken from the pointer's position on
+    /// screen when it's over this view's window, since a menu bar event can come
+    /// from a window other than the one holding the item.
+    private func localPoint(_ event: NSEvent) -> NSPoint {
+        if let window {
+            let screenPoint = NSEvent.mouseLocation
+            if window.frame.contains(screenPoint) {
+                return convert(window.convertPoint(fromScreen: screenPoint), from: nil)
+            }
+        }
+        return convert(event.locationInWindow, from: nil)
     }
 
     private func spaceID(at hit: MenuBarGeometry.Hit) -> UInt64? {
@@ -141,6 +154,38 @@ final class SpaceTilesView: NSView {
     }
 
     // MARK: Mouse
+
+    /// In the menu bar the status item's button takes the clicks (macOS's own
+    /// status item handling) and passes them on with `buttonClicked`; this view
+    /// only draws and tracks hovering there.
+    var clicksGoToButton = false
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        clicksGoToButton ? nil : super.hitTest(point)
+    }
+
+    /// A click on the status item's button (sent on mouse up): left click on a
+    /// tile switches, on the "!" opens Setup check, between groups opens the
+    /// menu; right-click or Control-click opens the menu.
+    func buttonClicked(_ event: NSEvent) {
+        setHovered(nil)
+        pressStart = nil
+        let hit = hit(event)
+        if event.type == .rightMouseUp || event.modifierFlags.contains(.control) {
+            onMenu?(spaceID(at: hit), event)
+            return
+        }
+        switch hit {
+        case .tile:
+            if let id = spaceID(at: hit) { onClick?(id) }
+        case .warning:
+            onWarning?()
+        case .gap:
+            let x = Double(localPoint(event).x)
+            log.notice("Menu bar click between tiles at x \(x, privacy: .public) of \(Double(self.bounds.width), privacy: .public)")
+            onMenu?(nil, event)
+        }
+    }
 
     override var mouseDownCanMoveWindow: Bool { false }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -315,7 +360,11 @@ final class MenuBarItem: NSObject {
             button.title = ""
             view.frame = button.bounds
             view.autoresizingMask = [.width, .height]
+            view.clicksGoToButton = true
             button.addSubview(view)
+            button.target = self
+            button.action = #selector(buttonClicked(_:))
+            _ = button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
         item.length = view.neededWidth
         NotificationCenter.default.addObserver(self, selector: #selector(windowChanged(_:)),
@@ -335,6 +384,11 @@ final class MenuBarItem: NSObject {
               window.occlusionState.contains(.visible) else { return false }
         let middle = NSPoint(x: window.frame.midX, y: window.frame.midY)
         return NSScreen.screens.contains { $0.frame.contains(middle) }
+    }
+
+    @objc private func buttonClicked(_ sender: Any?) {
+        guard let event = NSApp.currentEvent else { return }
+        view.buttonClicked(event)
     }
 
     @objc private func windowChanged(_ note: Notification) {
