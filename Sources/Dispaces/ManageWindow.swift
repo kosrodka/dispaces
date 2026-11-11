@@ -5,9 +5,9 @@ import SpacesCore
 /// showing a copy of every display's bar, connected displays first (in macOS's
 /// display order), then disconnected ones.
 ///
-/// Clicking a Space switches to it and hovering shows its apps, as on the bars.
+/// Clicking a Space switches to it and hovering shows its apps, as in the menu bar.
 /// "Show first Space" next to each display shows or hides its first Space here
-/// and on its bar (shown by default).
+/// and in the menu bar (shown by default).
 /// A disconnected display's Space can be dragged onto the bar of the connected
 /// display it's on now, which takes it out of the disconnected display's group;
 /// Forget drops a disconnected display. Command-Z undoes either, Shift-Command-Z
@@ -38,7 +38,7 @@ final class ManageWindowController: NSObject, NSWindowDelegate {
     init(bar: BarController) {
         self.bar = bar
         super.init()
-        bar.extraTileView = { [weak self] point in self?.tileView(at: point) }
+        bar.extraTile = { [weak self] point in self?.tileView(at: point)?.hoverTile }
     }
 
     func show() {
@@ -181,14 +181,14 @@ final class ManageWindowController: NSObject, NSWindowDelegate {
         return row
     }
 
-    /// "Show first Space" for one display; applies to its bar too.
+    /// "Show first Space" for one display; applies to the menu bar too.
     private func firstSpaceBox(_ identifier: String) -> NSButton {
         let box = NSButton(checkboxWithTitle: "Show first Space", target: self, action: #selector(toggleFirstSpace(_:)))
         box.controlSize = .small
         box.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
         box.state = bar.showsFirstSpace(identifier) ? .on : .off
         box.identifier = NSUserInterfaceItemIdentifier(identifier)
-        box.toolTip = "Show this display's first Space here and on its bar"
+        box.toolTip = "Show this display's first Space here and in the menu bar"
         return box
     }
 
@@ -253,11 +253,11 @@ final class ManageWindowController: NSObject, NSWindowDelegate {
             tile.toolTip = bar.showsAppsOnHover && row.spaceID != nil
                 ? nil : [row.name, row.note].compactMap { $0 }.joined(separator: " – ")
             if let id = row.spaceID {
-                // Same as on the bars: click switches, hover shows the apps.
+                // Same as in the menu bar: click switches, hover shows the apps.
                 tile.onClick = { [weak self] in self?.switchTo(id) }
                 tile.onRename = { [weak bar = self.bar] in bar?.renameSpace(id: id) }
                 tile.onHover = { [weak bar = self.bar, weak tile] inside in
-                    guard let tile else { return }
+                    guard let tile = tile?.hoverTile else { return }
                     bar?.hover(tile, inside: inside)
                 }
             } else {
@@ -343,7 +343,7 @@ final class ManageWindowController: NSObject, NSWindowDelegate {
 
     // MARK: Dragging a disconnected display's Space
 
-    /// Switches Space like the bars, then brings this window to the front and focuses it:
+    /// Switches Space like the menu bar, then brings this window to the front and focuses it:
     /// macOS hands focus to an app on the new Space, so take it back, once right
     /// away and once after macOS has finished switching.
     private func switchTo(_ id: UInt64) {
@@ -364,14 +364,14 @@ final class ManageWindowController: NSObject, NSWindowDelegate {
     }
 
     /// Mouse-down on a disconnected display's Space: a drag moves it, a quick
-    /// click switches to it (like the bars), Control-click or double-click renames it.
+    /// click switches to it (like the menu bar), Control-click or double-click renames it.
     private func press(_ tile: TileView, display: String, row: DisplayOverview.Row, event: NSEvent) {
         if event.modifierFlags.contains(.control) || event.clickCount == 2 {
             if let id = row.spaceID { bar.renameSpace(id: id) }
             return
         }
         let dragged = track(event, from: tile, row: row, display: display)
-        // Like the bars: only a quick click switches; pressing and holding is for grabbing.
+        // Like the menu bar: only a quick click switches; pressing and holding is for grabbing.
         let held = ProcessInfo.processInfo.systemUptime - event.timestamp
         if !dragged, held <= TileView.maxClickHold, let id = row.spaceID { switchTo(id) }
     }
@@ -484,7 +484,7 @@ final class ManageWindowController: NSObject, NSWindowDelegate {
     }
 }
 
-/// A bar in the Manage window: looks like the floating bars; a disconnected
+/// A bar in the Manage window, one per display; a disconnected
 /// display's bar has a dashed border. Lights up while a Space may be dropped on it.
 @MainActor
 private final class ManageBarView: NSView {

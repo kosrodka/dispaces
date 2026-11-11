@@ -29,8 +29,8 @@ The keyboard-shortcut method has one more advantage: the app can **read** your s
 | Option | Verdict |
 |---|---|
 | WidgetKit desktop widget | Can't refresh faster than ~every 15 min, can't post keystrokes (sandbox), hidden behind windows. Rejected, see 01-requirements §1.4. |
-| Menu bar only (like Spaceman) | Fine, but the menu bar is crowded and tiles with names don't fit well with notched MacBook displays. Kept as a small icon for the app menu only. |
-| Floating `NSPanel`, AppKit views | **Chosen.** Small, always visible, non-activating (never steals focus), on all Spaces. Plain AppKit views give exact control over single-click vs. double-click vs. right-click, with no SwiftUI tap-gesture delay. |
+| Menu bar status item with small square tiles | **Chosen** (7 Nov 2026, replacing the floating bars at the owner's request). Always where the user looks, takes no desktop space, numbers only so it stays narrow. One `NSStatusItem` whose button holds a self-drawn `SpaceTilesView`; clicks are mapped to tiles by `SpacesCore/MenuBarGeometry`. macOS may hide the item (no room, notch, hidden menu bar), so a fallback panel stands in. |
+| Floating `NSPanel`, AppKit views | Used before 7 Nov 2026 for one bar per display; now only for the fallback bar, the apps column and messages. Non-activating (never steals focus), on all Spaces. |
 
 ### Language, build and dependencies
 
@@ -56,26 +56,28 @@ The keyboard-shortcut method has one more advantage: the app can **read** your s
 │     │    • 60 s timer (safety net)                                                                │
 │     │    └─ SpaceReader ──▶ CGSPrivate (C) ──▶ CGSCopyManagedDisplaySpaces (read-only)            │
 │     │                                                                                             │
-│     ├─ BarController ── one DisplayBar (NSPanel) per display: controls, label, tiles; rename      │
+│     ├─ BarController ── MenuBarItem (NSStatusItem + SpaceTilesView); FallbackBar (NSPanel) when   │
+│     │    the item is off screen; apps column, Option-drag, rename                                 │
 │     │                                                                                             │
 │     ├─ SpaceSwitcher ── plans with SwitchPlanner, posts CGEvents, verifies, retries once          │
 │     │    └─ KeyPoster ──▶ CGEvent.post(.cghidEventTap)   (needs Accessibility)                    │
 │     │                                                                                             │
-│     ├─ Menu bar icon ── Show bars, Lock all bars, options, Manage window, Setup check, Help, Quit │
+│     ├─ Menu (right-click tiles) ── Rename, options, Manage window, Setup check, Help, Quit        │
 │     ├─ Setup check ── Accessibility granted? shortcuts on? "Displays have separate Spaces" on?    │
-│     └─ Preferences ── UserDefaults (own domain only) via Names and BarLayout validation           │
+│     └─ Preferences ── UserDefaults (own domain only) via Names and DisplayMemory validation        │
 └───────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Why the split:** everything that can be wrong in subtle ways (parsing the private data, numbering desktops, mapping to shortcuts, cleaning names) lives in `SpacesCore`, which uses only Foundation and has unit tests. The AppKit layer is thin glue. Bar geometry (keeping a bar on its display, edge resizing, fitting tiles into a bar) is in `SpacesCore/BarGeometry.swift` for the same reason; the AppKit floating panels (bars, apps column, messages) share one `FloatingPanel` base so they all stay non-activating.
+**Why the split:** everything that can be wrong in subtle ways (parsing the private data, numbering desktops, mapping to shortcuts, cleaning names) lives in `SpacesCore`, which uses only Foundation and has unit tests. The AppKit layer is thin glue. Menu bar geometry (where each square tile goes, which tile a click lands on) is in `SpacesCore/MenuBarGeometry.swift` for the same reason; the AppKit floating panels (fallback bar, apps column, messages) share one `FloatingPanel` base so they all stay non-activating.
 
 ## 2.3 Key flows
 
 **Refresh**
-1. Trigger: Space changed / displays changed / Mac woke / 60 s timer / Refresh button or "Refresh now".
+1. Trigger: Space changed / displays changed / Mac woke / 60 s timer / "Refresh now" in the menu.
 2. `SpaceReader` calls `CGSCopyManagedDisplaySpaces` (< 1 ms).
 3. `SnapshotParser` turns it into a `Snapshot`. Unknown or malformed entries are skipped, never force-unwrapped.
-4. If the snapshot differs from the last one, `BarController` redraws: one bar per display, each placed on its own screen (saved offset from that screen's top-left, clamped to the visible area). Bars for unplugged displays are closed. Otherwise nothing happens.
+4. If the tiles differ from the last ones, `BarController` redraws the menu bar item (and the fallback bar): each display's Spaces as a group, displays left to right as arranged. Otherwise nothing happens.
+5. Every occlusion change of the item's window, and every 2 s, `BarController` checks whether the item is on screen; after 1 s off screen the fallback bar shows, and it hides as soon as the item is back.
 
 **Switch (click on a tile)**
 1. `SwitchPlanner` decides:
@@ -88,7 +90,7 @@ The keyboard-shortcut method has one more advantage: the app can **read** your s
 5. Clicks while a switch is in progress are ignored, so fast clicking can't queue a storm of keystrokes.
 
 **Rename**
-Right-click or double-click → small dialog → name cleaned by `NameStore.sanitize` (trim, max 24 characters, control and text-direction override characters removed) → saved to the app's own preferences → bar redraws.
+Right-click a tile › Rename, or double-click in the Manage window → small dialog → name cleaned by `NameStore.sanitize` (trim, max 24 characters, control and text-direction override characters removed) → saved to the app's own preferences → tiles redraw.
 
 ## 2.4 How names are remembered
 

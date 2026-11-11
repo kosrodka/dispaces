@@ -42,12 +42,13 @@ Functional checks on macOS 27 at the same time:
 
 | Check | Result |
 |---|---|
-| One bar per display, Spaces in Mission Control order | ☐ |
+| One menu bar item, one group per display, Spaces in Mission Control order | ☐ |
+| Fallback bar appears within about 2 s when the item is hidden (full-screen app, crowded menu bar) and goes when it's back | ☐ |
 | Tile numbers match "Switch to Desktop N" (click 4 on the second display goes there) | ☐ |
 | Highlight follows Space changes made with the keyboard, trackpad and Mission Control | ☐ |
 | Full-screen app shows as dashed "FS" tile | ☐ |
-| Clicking the bar never steals focus from the app you're typing in | ☐ |
-| Bar stays put in Mission Control; no Stage Manager stage is created | ☐ |
+| Clicking a tile never steals focus from the app you're typing in | ☐ |
+| The fallback bar stays put in Mission Control; no Stage Manager stage is created | ☐ |
 
 ## 7.3 Findings
 
@@ -59,7 +60,7 @@ Functional checks on macOS 27 at the same time:
 
 ## 7.4 Residual risks (accepted for v0.1)
 
-1. **Private API.** A future macOS could change `CGSCopyManagedDisplaySpaces`. Impact: the bar shows "Can't read Spaces"; no crash, no data loss.
+1. **Private API.** A future macOS could change `CGSCopyManagedDisplaySpaces`. Impact: the menu bar item shows only the amber "!"; no crash, no data loss.
 2. **Accessibility is powerful.** Mitigated by code size (about 4,400 lines of Swift including comments), the key allow-list, no event reading, hardened runtime, and CI binary checks. Review any future change to `KeyPoster`.
 3. **Not notarised.** Downloads need the quarantine flag removed. Building from source avoids this.
 4. **Ad-hoc signature.** Accessibility must be re-granted after each update unless you sign with your own certificate (06-operations §6.4).

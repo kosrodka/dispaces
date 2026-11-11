@@ -1,6 +1,6 @@
 import Foundation
 
-/// Whether each display's first Space is shown on its bar and in the Manage
+/// Whether each display's first Space is shown in the menu bar and in the Manage
 /// window. Shown by default on every display; the user can untick it per display.
 /// Only the user's changes are stored; everything read back is validated.
 public struct FirstSpaces: Equatable, Sendable {

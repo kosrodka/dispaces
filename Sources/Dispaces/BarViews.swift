@@ -36,19 +36,6 @@ struct GroupModel: Equatable {
     var ghosts: [Ghost] = []
 }
 
-/// What one display's bar shows.
-struct BarModel: Equatable {
-    /// nil when the Space list couldn't be read.
-    let group: GroupModel?
-    let warning: Bool
-    let collapsed: Bool
-    let locked: Bool
-    /// Size the user picked by dragging the bar's edges; nil = natural size.
-    var size: CGSize?
-    /// A window is being Option-dragged over this bar.
-    var glowing = false
-}
-
 enum Palette {
     static let focusFill = NSColor(srgbRed: 0, green: 0x63 / 255.0, blue: 0xCE / 255.0, alpha: 1)
     static let warning = NSColor(name: nil) { appearance in
@@ -63,6 +50,7 @@ enum Palette {
     }
 }
 
+/// Sizes of the Manage window's bars.
 enum Metrics {
     static let barHeight: CGFloat = 36
     static let inset: CGFloat = 5
@@ -71,12 +59,6 @@ enum Metrics {
     static let groupPadding: CGFloat = 6
     static let normalTile: ClosedRange<CGFloat> = 64...150
     static let compactTile: ClosedRange<CGFloat> = 40...90
-    /// Narrowest a tile gets when the user makes the bar narrow (at scale 1).
-    static let minTile: CGFloat = 26
-    static let controlSize: CGFloat = 20
-    static let controlGap: CGFloat = 1
-    /// How close to the bar's edge the pointer must be to resize it.
-    static let resizeZone: CGFloat = 5
 
     // Fonts grow with the bar's height; `scale` is 1 at the default height.
     static func tileFont(_ scale: CGFloat, bold: Bool) -> NSFont {
@@ -90,7 +72,7 @@ enum Metrics {
     }
 }
 
-/// Base of the app's floating panels (bars, apps column, messages): borderless,
+/// Base of the app's floating panels (apps column, messages): borderless,
 /// non-activating, above normal windows and on every Space. Never key or main,
 /// so it never takes focus or your typing.
 @MainActor
@@ -121,16 +103,7 @@ extension NSView {
     }
 }
 
-extension BarGeometry.Rect {
-    init(_ rect: NSRect) {
-        self.init(x: Double(rect.origin.x), y: Double(rect.origin.y),
-                  width: Double(rect.size.width), height: Double(rect.size.height))
-    }
-
-    var nsRect: NSRect { NSRect(x: x, y: y, width: width, height: height) }
-}
-
-/// A clickable, rounded tile. Draws itself; no subviews.
+/// A clickable, rounded tile in the Manage window. Draws itself; no subviews.
 @MainActor
 final class TileView: NSView {
     let model: TileModel
@@ -174,6 +147,11 @@ final class TileView: NSView {
     /// The tile's frame on screen.
     var screenFrame: NSRect? {
         window.map { $0.convertToScreen(convert(bounds, to: nil)) }
+    }
+
+    /// This tile, for the apps column.
+    var hoverTile: HoverTile? {
+        screenFrame.map { HoverTile(spaceID: model.spaceID, name: model.name, frame: $0, screen: window?.screen) }
     }
 
     override func updateTrackingAreas() {
@@ -286,7 +264,7 @@ final class TileView: NSView {
     }
 }
 
-/// A display's name at the start of its area.
+/// A display's name at the start of its area (Manage window).
 @MainActor
 final class DisplayLabelView: NSView {
     let text: String
@@ -361,232 +339,6 @@ final class DisplayLabelView: NSView {
         let rect = NSRect(x: 6, y: (bounds.height - height) / 2, width: bounds.width - 12, height: height)
         (text as NSString).draw(with: rect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: attrs)
     }
-}
-
-/// A tiny icon button in the bar's control section (show/hide Spaces, lock, refresh).
-@MainActor
-final class ControlButton: NSView {
-    var onClick: (() -> Void)?
-    private let imageView = NSImageView()
-
-    init(symbol: String, label: String) {
-        super.init(frame: .zero)
-        toolTip = label
-        let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
-        imageView.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)?.withSymbolConfiguration(config)
-        imageView.contentTintColor = .secondaryLabelColor
-        imageView.imageScaling = .scaleNone
-        addSubview(imageView)
-        wantsLayer = true
-        layer?.cornerRadius = 5
-        setAccessibilityElement(true)
-        setAccessibilityRole(.button)
-        setAccessibilityLabel(label)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("not used") }
-
-    override func layout() {
-        super.layout()
-        imageView.frame = bounds
-    }
-
-    /// Clicks land on the button, not on the image inside it.
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        frame.contains(point) ? self : nil
-    }
-
-    override var mouseDownCanMoveWindow: Bool { false }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
-    override func mouseDown(with event: NSEvent) {
-        layer?.backgroundColor = NSColor.quaternaryLabelColor.cgColor
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        layer?.backgroundColor = nil
-        if bounds.contains(convert(event.locationInWindow, from: nil)) { onClick?() }
-    }
-
-    override func accessibilityPerformPress() -> Bool {
-        onClick?()
-        return true
-    }
-}
-
-/// The amber "!" shown when setup needs attention.
-@MainActor
-final class WarningView: NSView {
-    var onClick: (() -> Void)?
-
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        toolTip = "Setup needs attention"
-        setAccessibilityElement(true)
-        setAccessibilityRole(.button)
-        setAccessibilityLabel("Setup needs attention")
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("not used") }
-
-    override var mouseDownCanMoveWindow: Bool { false }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func mouseDown(with event: NSEvent) { onClick?() }
-    override func accessibilityPerformPress() -> Bool {
-        onClick?()
-        return true
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.75, dy: 0.75), xRadius: 6, yRadius: 6)
-        path.lineWidth = 1.5
-        Palette.warning.setStroke()
-        path.stroke()
-        let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 13, weight: .bold), .foregroundColor: Palette.warning]
-        let size = ("!" as NSString).size(withAttributes: attrs)
-        ("!" as NSString).draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2), withAttributes: attrs)
-    }
-}
-
-/// The bar's background. Dragging on it moves the bar; near its edges the
-/// pointer turns into a resize cursor and dragging resizes it.
-@MainActor
-final class BarBackgroundView: NSView {
-    var onDrag: ((NSEvent) -> Void)?
-    var onResize: ((NSEvent, ResizeEdges) -> Void)?
-    /// Double-click on an edge: back to the natural size.
-    var onResetSize: (() -> Void)?
-    var canResize = false {
-        didSet { if !canResize { hoveredEdges = [] } }
-    }
-    /// A window is being Option-dragged over the bar.
-    var glowing = false {
-        didSet { if glowing != oldValue { needsDisplay = true } }
-    }
-
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        wantsLayer = true
-        layer?.cornerRadius = 11
-        layer?.borderWidth = 1
-        setAccessibilityElement(true)
-        setAccessibilityRole(.group)
-        setAccessibilityLabel("Dispaces")
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("not used") }
-
-    override var mouseDownCanMoveWindow: Bool { false }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
-    override func mouseDown(with event: NSEvent) {
-        let edges = edges(at: convert(event.locationInWindow, from: nil))
-        if edges.isEmpty {
-            onDrag?(event)
-        } else if event.clickCount == 2 {
-            onResetSize?()
-        } else {
-            onResize?(event, edges)
-        }
-    }
-
-    /// Edges within reach of `point`; empty when resizing isn't allowed.
-    func edges(at point: NSPoint) -> ResizeEdges {
-        guard canResize else { return [] }
-        return BarGeometry.edges(x: Double(point.x), y: Double(point.y), width: Double(bounds.width),
-                                 height: Double(bounds.height), zone: Double(Metrics.resizeZone))
-    }
-
-    // The cursor. Dispaces is never the active app (so it can't steal your
-    // typing), and macOS lets the active app reset the cursor whenever it likes.
-    // So while the pointer is on an edge the resize cursor is set again on every
-    // mouse event and a few times a second, and the border is highlighted as a
-    // cue that doesn't depend on the cursor.
-
-    /// Edges under the pointer right now.
-    private(set) var hoveredEdges: ResizeEdges = [] {
-        didSet {
-            guard hoveredEdges != oldValue else { return }
-            needsDisplay = true
-            if hoveredEdges.isEmpty {
-                cursorTimer?.invalidate()
-                cursorTimer = nil
-                NSCursor.arrow.set()
-            } else if cursorTimer == nil {
-                let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] timer in
-                    MainActor.assumeIsolated {
-                        guard let self else { return timer.invalidate() }
-                        self.reassertCursor()
-                    }
-                }
-                RunLoop.main.add(timer, forMode: .common)
-                cursorTimer = timer
-            }
-        }
-    }
-    private var cursorTimer: Timer?
-    /// Edges being dragged right now; the pointer may leave the bar meanwhile.
-    var activeResize: ResizeEdges = []
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        resetTrackingArea([.mouseMoved, .mouseEnteredAndExited, .cursorUpdate])
-    }
-
-    override func mouseEntered(with event: NSEvent) { hover(event) }
-    override func mouseMoved(with event: NSEvent) { hover(event) }
-    override func cursorUpdate(with event: NSEvent) { hover(event) }
-    override func mouseExited(with event: NSEvent) { hoveredEdges = [] }
-
-    private func hover(_ event: NSEvent) {
-        hoveredEdges = edges(at: convert(event.locationInWindow, from: nil))
-        if !hoveredEdges.isEmpty { Self.cursor(for: hoveredEdges).set() }
-    }
-
-    /// Re-checks where the pointer is (an exit can be missed) and sets the cursor again.
-    private func reassertCursor() {
-        if !activeResize.isEmpty {
-            Self.cursor(for: activeResize).set()
-            return
-        }
-        guard let window else {
-            hoveredEdges = []
-            return
-        }
-        hoveredEdges = edges(at: convert(window.mouseLocationOutsideOfEventStream, from: nil))
-        if !hoveredEdges.isEmpty { Self.cursor(for: hoveredEdges).set() }
-    }
-
-    static func cursor(for edges: ResizeEdges) -> NSCursor {
-        let position: NSCursor.FrameResizePosition
-        switch (edges.contains(.left), edges.contains(.right), edges.contains(.top), edges.contains(.bottom)) {
-        case (true, _, true, _): position = .topLeft
-        case (true, _, _, true): position = .bottomLeft
-        case (_, true, true, _): position = .topRight
-        case (_, true, _, true): position = .bottomRight
-        case (true, _, _, _): position = .left
-        case (_, true, _, _): position = .right
-        case (_, _, true, _): position = .top
-        case (_, _, _, true): position = .bottom
-        default: return .arrow
-        }
-        return .frameResize(position: position, directions: .all)
-    }
-
-    override func updateLayer() {
-        let base = NSColor.windowBackgroundColor
-        let fill = glowing ? (base.blended(withFraction: 0.25, of: .systemYellow) ?? base) : base
-        layer?.backgroundColor = fill.withAlphaComponent(0.96).cgColor
-        let highlighted = glowing || !hoveredEdges.isEmpty
-        let border = glowing ? NSColor.systemYellow : NSColor.controlAccentColor
-        layer?.borderColor = (highlighted ? border : NSColor.separatorColor).cgColor
-        layer?.borderWidth = highlighted ? 2 : 1
-    }
-
-    override var wantsUpdateLayer: Bool { true }
 }
 
 /// A thin vertical line between display areas.

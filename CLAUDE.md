@@ -24,9 +24,9 @@ A small macOS menu-bar app that shows every Space per display in a floating bar 
 
 ## Layout
 - `Sources/SpacesCore`: pure logic (Foundation only) with unit tests in `Tests/SpacesCoreTests`. Put anything that can be tested here.
-- `Sources/Dispaces`: AppKit glue (panel, views, menu, key posting, monitor).
+- `Sources/Dispaces`: AppKit glue (menu bar item, fallback bar, views, menu, key posting, monitor).
 - `Sources/CGSPrivate`: C header for the private read-only call.
-- `Assets/`: app icon (`AppIcon.svg`, rendered to `AppIcon.iconset` PNGs that `bundle.sh` turns into `AppIcon.icns`) and the menu bar glyph's source (`MenuBarGlyph.svg`, drawn in code by `MenuBarGlyph.swift`).
+- `Assets/`: app icon (`AppIcon.svg`, rendered to `AppIcon.iconset` PNGs that `bundle.sh` turns into `AppIcon.icns`).
 - `scripts/`: `bundle.sh` (build + sign), `security-check.sh` (binary checks), `source-check.sh` (forbidden APIs).
 - `docs/`: requirements, architecture, UI/UX, security + pen-test plan, CI/CD, operations, pen-test report.
 

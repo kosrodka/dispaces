@@ -8,7 +8,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let monitor = SpaceMonitor()
     private lazy var switcher = SpaceSwitcher(monitor: monitor)
     private lazy var bar = BarController(prefs: prefs, monitor: monitor, switcher: switcher)
-    private var statusItem: NSStatusItem?
+    private let menu = NSMenu()
+    /// The Space that was right-clicked to open the menu, offered for renaming.
+    private var menuSpaceID: UInt64?
     private lazy var manageWindow = ManageWindowController(bar: bar)
     private lazy var manualWindow = ManualWindowController()
     /// Connected displays, to notice one being plugged in or unplugged.
@@ -18,13 +20,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let resetDelay: TimeInterval = 1
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        setUpStatusItem()
+        menu.delegate = self
+        bar.onMenu = { [weak self] spaceID, view in self?.openMenu(spaceID: spaceID, under: view) }
         bar.needsAttention = { [weak self] in self?.setupIssues().isEmpty == false }
         bar.onWarningClick = { [weak self] in self?.showSetupCheck() }
         monitor.onRefresh = { [weak self] snapshot in self?.bar.show(snapshot) }
         bar.onChange = { [weak self] in self?.manageWindow.reload() }
         monitor.start()
-        if prefs.barHidden { bar.setVisible(false) }
         bar.setDragWatching(prefs.dragWindows)
         displays = Self.connectedDisplays()
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged),
@@ -34,7 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Display connected or disconnected
 
-    /// Rebuilds every bar from scratch shortly after a display is connected or
+    /// Redraws the Spaces from scratch shortly after a display is connected or
     /// disconnected (not on resolution or arrangement changes).
     @objc private func screensChanged() {
         let now = Self.connectedDisplays()
@@ -43,7 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         log.notice("Display connected or disconnected")
         resetWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            MainActor.assumeIsolated { self?.bar.resetBars() }
+            MainActor.assumeIsolated { self?.bar.reset() }
         }
         resetWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.resetDelay, execute: work)
@@ -53,21 +55,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Set(NSScreen.screens.compactMap(Screens.identifier(of:)))
     }
 
-    // MARK: Menu bar icon
+    // MARK: Menu
 
-    private func setUpStatusItem() {
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = MenuBarGlyph.make()
-        let menu = NSMenu()
-        menu.delegate = self
-        item.menu = menu
-        statusItem = item
+    /// Opens the menu just under the tiles (right-click, Control-click, or a
+    /// click between displays).
+    private func openMenu(spaceID: UInt64?, under view: NSView) {
+        menuSpaceID = spaceID
+        _ = menu.popUp(positioning: nil, at: NSPoint(x: 0, y: -4), in: view)
+        menuSpaceID = nil
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        add(menu, "Show bars", #selector(toggleBar), checked: bar.isVisible)
-        add(menu, "Lock all bars", #selector(toggleLock), checked: bar.allLocked)
+        if let id = menuSpaceID, let name = bar.spaceName(id) {
+            let item = NSMenuItem(title: "Rename “\(name)”…", action: #selector(renameSpace(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = NSNumber(value: id)
+            menu.addItem(item)
+            menu.addItem(.separator())
+        }
+        add(menu, "Floating bar when the menu bar item is hidden", #selector(toggleFallback), checked: bar.showsFallback)
         add(menu, "Show apps on hover", #selector(toggleAppsOnHover), checked: bar.showsAppsOnHover)
         add(menu, "Option-drag windows to Spaces", #selector(toggleDragWindows), checked: prefs.dragWindows)
         add(menu, "Launch at login", #selector(toggleLogin), checked: SMAppService.mainApp.status == .enabled)
@@ -96,8 +103,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(item)
     }
 
-    @objc private func toggleBar() { bar.setVisible(!bar.isVisible) }
-    @objc private func toggleLock() { bar.setAllLocked(!bar.allLocked) }
+    @objc private func toggleFallback() { bar.setShowsFallback(!bar.showsFallback) }
+    @objc private func renameSpace(_ sender: NSMenuItem) {
+        guard let id = (sender.representedObject as? NSNumber)?.uint64Value else { return }
+        bar.renameSpace(id: id)
+    }
     @objc private func refreshNow() { bar.refreshNow() }
     @objc private func showManageWindow() { manageWindow.show() }
     @objc private func showManual() { manualWindow.show() }
