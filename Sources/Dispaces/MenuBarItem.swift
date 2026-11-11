@@ -45,6 +45,8 @@ final class SpaceTilesView: NSView {
     let metrics: MenuBarGeometry.Metrics
     private var layout: MenuBarGeometry.Layout
     private var hovered: Int?
+    /// The tile the pointer is on now, placed where the pointer actually is.
+    private var hoveredTile: HoverTile?
     private var tips: [ToolTipText] = []
     private var showsToolTips = true
     /// When the current press started, if it may still become a click.
@@ -74,7 +76,10 @@ final class SpaceTilesView: NSView {
         self.showsToolTips = showsToolTips
         layout = MenuBarGeometry.layout(content.runs, warning: content.warning, metrics: metrics)
         setAccessibilityLabel(content.summary)
-        if let hovered, hovered >= content.entries.count { self.hovered = nil }
+        if let hovered, hovered >= content.entries.count {
+            self.hovered = nil
+            hoveredTile = nil
+        }
         resetToolTips()
         needsDisplay = true
         return true
@@ -200,14 +205,32 @@ final class SpaceTilesView: NSView {
     override func mouseExited(with event: NSEvent) { setHovered(nil) }
 
     private func track(_ event: NSEvent) {
-        if case .tile(let index) = hit(event) { setHovered(index) } else { setHovered(nil) }
+        if case .tile(let index) = hit(event) { setHovered(index, event: event) } else { setHovered(nil) }
     }
 
-    private func setHovered(_ index: Int?) {
+    private func setHovered(_ index: Int?, event: NSEvent? = nil) {
         guard index != hovered else { return }
-        if let old = hovered, let tile = hoverTile(old) { onHover?(tile, false) }
+        if let old = hoveredTile { onHover?(old, false) }
         hovered = index
-        if let index, let tile = hoverTile(index) { onHover?(tile, true) }
+        hoveredTile = index.flatMap { index in event.flatMap { hoverTile(index, pointerEvent: $0) } }
+        if let tile = hoveredTile { onHover?(tile, true) }
+    }
+
+    /// The Space whose tile the pointer is on, as the last mouse event said.
+    var hoveredSpaceID: UInt64? { hoveredTile?.spaceID }
+
+    /// A tile's frame on screen, measured from the pointer. On Spaces other
+    /// than the first, macOS can show the menu bar item through a window other
+    /// than the one holding this view, so its frame isn't where the tile is.
+    private func hoverTile(_ index: Int, pointerEvent event: NSEvent) -> HoverTile? {
+        guard index < content.entries.count, index < layout.tileXs.count else { return nil }
+        let local = localPoint(event)
+        let pointer = NSEvent.mouseLocation
+        let frame = NSRect(x: pointer.x - (local.x - CGFloat(layout.tileXs[index])), y: pointer.y - local.y,
+                           width: CGFloat(metrics.tile), height: bounds.height)
+        let tile = content.entries[index].tile
+        let screen = NSScreen.screens.first { $0.frame.contains(pointer) } ?? window?.screen
+        return HoverTile(spaceID: tile.spaceID, name: tile.name, frame: frame, screen: screen)
     }
 
     override func mouseDown(with event: NSEvent) {

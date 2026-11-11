@@ -325,7 +325,7 @@ final class BarController {
         let work = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.hoveredSpaceID == spaceID, NSEvent.pressedMouseButtons == 0,
-                      let tile = self.hoverTile(at: NSEvent.mouseLocation), tile.spaceID == spaceID else { return }
+                      self.pointerIsOn(spaceID) else { return }
                 self.appsPanel.onPick = { [weak self] app in self?.bringToFront(app, on: spaceID) }
                 self.appsPanel.show(title: tile.name, apps: SpaceAppsReader.apps(on: spaceID), tile: tile.frame,
                                     screen: tile.screen)
@@ -338,7 +338,16 @@ final class BarController {
     /// True while the pointer is on the hovered tile or on its apps column.
     private func pointerOnApps() -> Bool {
         let point = NSEvent.mouseLocation
-        return appsPanel.contains(point) || (hoveredSpaceID != nil && hoverTile(at: point)?.spaceID == hoveredSpaceID)
+        guard !appsPanel.contains(point) else { return true }
+        return hoveredSpaceID.map(pointerIsOn) ?? false
+    }
+
+    /// True while the pointer is on this Space's tile. The tile rows know it from
+    /// their own mouse events, which also arrive when macOS shows the menu bar
+    /// item through another window (on Spaces other than the first).
+    private func pointerIsOn(_ spaceID: UInt64) -> Bool {
+        [menuItem.view, fallback.tiles].contains { $0.hoveredSpaceID == spaceID }
+            || extraTile?(NSEvent.mouseLocation)?.spaceID == spaceID
     }
 
     /// Hides the column unless the pointer is on its way from the tile into it (or back).
@@ -383,10 +392,6 @@ final class BarController {
         hoverWork = nil
         hoveredSpaceID = nil
         appsPanel.orderOut(nil)
-    }
-
-    private func hoverTile(at point: NSPoint) -> HoverTile? {
-        visibleRows.lazy.compactMap { $0.hoverTile(atScreen: point) }.first ?? extraTile?(point)
     }
 
     /// Switches to a Space; `switched` runs once macOS has made it current.
