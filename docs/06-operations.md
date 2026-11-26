@@ -52,13 +52,14 @@ Check everything at once: right-click the tiles › **Setup check…**. All four
 
 | Do | How |
 |---|---|
-| Switch Space | Click its tile |
+| Switch Space | Click its tile: every display switches to that logical space. Option-click: only the display whose menu bar you clicked |
 | Open the menu | Right-click (or Control-click) the tiles in the menu bar |
-| Rename | Right-click a tile › Rename, or double-click it in Manage displays and spaces |
+| Rename | Right-click a tile › Rename (every display's Space in that logical space), or double-click a heading or Space in Manage displays and spaces |
 | Keep the tiles visible | Command-drag them towards the clock (macOS hides the items furthest from it first). If macOS hides them anyway, the floating fallback bar appears at the top of the main display; turn it off with the menu › Floating bar when the menu bar item is hidden |
-| Move a window to another Space | Turn on the menu › Option-drag windows to Spaces (once). Hold Option, grab the window by its title bar and drag the pointer onto a tile in the menu bar. Wait until the tile has been yellow for a moment and the Space changes, then let go |
+| Move a window to another Space | Turn on the menu › Option-Control-drag windows to Spaces (once). Grab the window by its title bar, then hold Option and Control and drag the pointer onto a tile in the menu bar. Wait until the tile has had its thick ring for a moment and the Space changes, then let go |
 | See which apps are on a Space | Rest the pointer on its tile. Turn off with the menu › Show apps on hover |
 | Jump to an app on a Space | Rest on the tile, move into the column and click the app |
+| Show or hide first Spaces | `defaults write io.github.kosrodka.SpacesBar firstSpaceExternal -bool true` (or `firstSpaceBuiltIn -bool false`), then the menu › Refresh now |
 | Read the manual or check the version | The menu › Help › User manual, or Help › Current release |
 | See all displays, including unplugged ones | The menu › Manage displays and spaces. Forget drops an unplugged display you won't use again; dragging one of its Spaces onto the bar of the display it's on now (in that window) stops grouping that Space (windows don't move) |
 | Force a refresh | The menu › Refresh now (normally automatic within 0.1 s, plus every 60 s) |
@@ -158,6 +159,6 @@ Manual ones:
 - **P9 shortcut off:** untick "Switch to Desktop 3", click tile 3. Expect: message naming "Switch to Desktop 3"; re-tick afterwards.
 - **P10 hot-plug, sleep:** unplug/replug the external display; sleep and wake. Expect: correct areas within a second, names kept.
 - **P11 data loss:** note window counts per app (Window menu) before and after 5 minutes of switching. Expect: identical.
-- **P13 Option-drag scope:** see docs/04-security.md P13.
+- **P13 Option-Control drag scope:** see docs/04-security.md P13.
 - **P14 hover icons scope:** see docs/04-security.md P14.
 - **P15 apps column clicks:** see docs/04-security.md P15.

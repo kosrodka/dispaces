@@ -4,49 +4,37 @@ import SpacesCore
 /// What one tile shows.
 struct TileModel: Equatable {
     enum State: Equatable {
-        /// Current Space on the display you are using.
-        case focused
-        /// Current Space on another display.
-        case current
+        /// Showing: a logical space every display with a Space in it shows, or a
+        /// single Space its display shows. Strong orange.
+        case all
+        /// A logical space only some displays show. Pale orange.
+        case some
         case normal
     }
 
-    let spaceID: UInt64
+    let target: TileTarget
     let number: String
     let name: String
     let state: State
     let isFullScreen: Bool
     let failed: Bool
-    /// A window is being Option-dragged onto this tile (shown in yellow).
+    /// A window is being Option-Control-dragged onto this tile (thick ring).
     var armed = false
     let accessibilityLabel: String
 }
 
-struct GroupModel: Equatable {
-    /// Spaces of a disconnected display that macOS moved onto this one,
-    /// shown after this display's own Spaces under the old display's name.
-    struct Ghost: Equatable {
-        let label: String
-        let tiles: [TileModel]
-    }
-
-    let displayKey: String
-    let label: String
-    let tiles: [TileModel]
-    var ghosts: [Ghost] = []
-}
-
 enum Palette {
-    static let focusFill = NSColor(srgbRed: 0, green: 0x63 / 255.0, blue: 0xCE / 255.0, alpha: 1)
+    /// Fill of a showing tile (`TileModel.State.all`), and the ring of a partly showing one.
+    static let strong = NSColor.systemOrange
+    /// Fill of a partly showing logical space (`TileModel.State.some`).
+    static let pale = NSColor.systemOrange.withAlphaComponent(0.35)
+    /// Ring of a tile whose switch failed.
+    static let failed = NSColor.systemRed
+    /// The setup "!" and message borders.
     static let warning = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             ? NSColor(srgbRed: 1, green: 0xB3 / 255.0, blue: 0x40 / 255.0, alpha: 1)
             : NSColor(srgbRed: 0xA0 / 255.0, green: 0x5A / 255.0, blue: 0, alpha: 1)
-    }
-    static let ring = NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 0x4D / 255.0, green: 0xA3 / 255.0, blue: 1, alpha: 1)
-            : focusFill
     }
 }
 
@@ -111,6 +99,8 @@ final class TileView: NSView {
     let scale: CGFloat
     var onClick: (() -> Void)?
     var onRename: (() -> Void)?
+    /// The rename item in the tile's right-click menu.
+    var renameTitle = "Rename Space…"
     /// Pointer entered (true) or left (false) the tile.
     var onHover: ((Bool) -> Void)?
     /// A click switches only when the button is let go within this many
@@ -151,7 +141,7 @@ final class TileView: NSView {
 
     /// This tile, for the apps column.
     var hoverTile: HoverTile? {
-        screenFrame.map { HoverTile(spaceID: model.spaceID, name: model.name, frame: $0, screen: window?.screen) }
+        screenFrame.map { HoverTile(target: model.target, name: model.name, frame: $0, screen: window?.screen) }
     }
 
     override func updateTrackingAreas() {
@@ -203,7 +193,7 @@ final class TileView: NSView {
 
     private func showMenu(_ event: NSEvent) {
         let menu = NSMenu()
-        let item = NSMenuItem(title: "Rename Space…", action: #selector(renameFromMenu), keyEquivalent: "")
+        let item = NSMenuItem(title: renameTitle, action: #selector(renameFromMenu), keyEquivalent: "")
         item.target = self
         menu.addItem(item)
         NSMenu.popUpContextMenu(menu, with: event, for: self)
@@ -219,16 +209,16 @@ final class TileView: NSView {
         var textColor: NSColor
         var numberColor: NSColor
         switch model.state {
-        case .focused:
-            Palette.focusFill.setFill()
+        case .all:
+            Palette.strong.setFill()
             path.fill()
-            Palette.focusFill.setStroke()
-            textColor = .white
-            numberColor = NSColor.white.withAlphaComponent(0.85)
-        case .current:
-            NSColor.quaternaryLabelColor.setFill()
+            Palette.strong.setStroke()
+            textColor = .black
+            numberColor = NSColor.black.withAlphaComponent(0.7)
+        case .some:
+            Palette.pale.setFill()
             path.fill()
-            Palette.ring.setStroke()
+            Palette.strong.setStroke()
             textColor = .labelColor
             numberColor = .secondaryLabelColor
         case .normal:
@@ -237,13 +227,13 @@ final class TileView: NSView {
             numberColor = .secondaryLabelColor
         }
         if model.armed {
-            NSColor.systemYellow.setFill()
-            path.fill()
-            NSColor.systemYellow.setStroke()
-            textColor = .black
-            numberColor = NSColor.black.withAlphaComponent(0.7)
+            NSColor.labelColor.setStroke()
+            path.lineWidth = 2.5
         }
-        if model.failed { Palette.warning.setStroke() }
+        if model.failed {
+            Palette.failed.setStroke()
+            path.lineWidth = 2
+        }
         if model.isFullScreen { path.setLineDash([3, 2], count: 2, phase: 0) }
         path.stroke()
 
@@ -261,6 +251,49 @@ final class TileView: NSView {
         let x = numberOrigin.x + numberSize.width + 6
         let nameRect = NSRect(x: x, y: (bounds.height - nameHeight) / 2, width: max(0, bounds.width - x - padding + 2), height: nameHeight)
         (model.name as NSString).draw(with: nameRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: nameAttrs)
+    }
+}
+
+/// An empty cell in the Manage window grid: this display has no Space with
+/// the column's name. Lights up while a Space from its row may be dropped on it.
+@MainActor
+final class NotAssignedView: NSView {
+    let text: String
+    var highlighted = false {
+        didSet { if highlighted != oldValue { needsDisplay = true } }
+    }
+
+    init(text: String) {
+        self.text = text
+        super.init(frame: .zero)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+        setAccessibilityLabel(text)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 6, yRadius: 6)
+        if highlighted {
+            NSColor.controlAccentColor.withAlphaComponent(0.2).setFill()
+            path.fill()
+            NSColor.controlAccentColor.setStroke()
+            path.lineWidth = 2
+        } else {
+            NSColor.separatorColor.setStroke()
+            path.lineWidth = 1
+            path.setLineDash([3, 2], count: 2, phase: 0)
+        }
+        path.stroke()
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byTruncatingTail
+        let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 10),
+                                                    .foregroundColor: NSColor.tertiaryLabelColor, .paragraphStyle: style]
+        let height = (text as NSString).size(withAttributes: attrs).height
+        let rect = NSRect(x: 8, y: (bounds.height - height) / 2, width: max(0, bounds.width - 16), height: height)
+        (text as NSString).draw(with: rect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: attrs)
     }
 }
 
@@ -383,26 +416,45 @@ final class AppsPanel: FloatingPanel {
         contentView = box
     }
 
-    /// Shows `apps` in a column under (or, near the bottom of the screen, over) `tile`.
-    func show(title: String, apps: [NSRunningApplication], tile: NSRect, screen: NSScreen?) {
+    /// One display's apps in the column; the heading names the display when a
+    /// logical space spans several.
+    struct Section {
+        let heading: String?
+        let apps: [NSRunningApplication]
+    }
+
+    /// Shows the apps in a column under (or, near the bottom of the screen, over) `tile`.
+    func show(title: String, sections: [Section], tile: NSRect, screen: NSScreen?) {
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         let heading = NSTextField(labelWithString: title)
         heading.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
         heading.textColor = .secondaryLabelColor
         heading.lineBreakMode = .byTruncatingTail
         stack.addArrangedSubview(heading)
-        if apps.isEmpty {
-            stack.addArrangedSubview(Self.label("No windows", color: .tertiaryLabelColor))
+        var shown = 0
+        let total = sections.reduce(0) { $0 + $1.apps.count }
+        for section in sections {
+            if let name = section.heading {
+                let label = NSTextField(labelWithString: name.uppercased())
+                label.font = NSFont.systemFont(ofSize: 9, weight: .semibold)
+                label.textColor = .tertiaryLabelColor
+                label.lineBreakMode = .byTruncatingTail
+                stack.addArrangedSubview(label)
+            }
+            if section.apps.isEmpty {
+                stack.addArrangedSubview(Self.label("No windows", color: .tertiaryLabelColor))
+            }
+            for app in section.apps where shown < Self.maxRows {
+                shown += 1
+                let row = AppRowView(app: app)
+                row.onClick = { [weak self] in self?.onPick?(app) }
+                stack.addArrangedSubview(row)
+                row.widthAnchor.constraint(equalTo: stack.widthAnchor,
+                                           constant: -(stack.edgeInsets.left + stack.edgeInsets.right)).isActive = true
+            }
         }
-        for app in apps.prefix(Self.maxRows) {
-            let row = AppRowView(app: app)
-            row.onClick = { [weak self] in self?.onPick?(app) }
-            stack.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalTo: stack.widthAnchor,
-                                       constant: -(stack.edgeInsets.left + stack.edgeInsets.right)).isActive = true
-        }
-        if apps.count > Self.maxRows {
-            stack.addArrangedSubview(Self.label("+\(apps.count - Self.maxRows) more", color: .secondaryLabelColor))
+        if total > shown {
+            stack.addArrangedSubview(Self.label("+\(total - shown) more", color: .secondaryLabelColor))
         }
 
         box.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor

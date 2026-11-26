@@ -47,6 +47,14 @@ final class NamesTests: XCTestCase {
         XCTAssertEqual(names.name(for: snap.displays[0], defaultName: "x"), "Studio")
     }
 
+    func testSetNameByKeyAndClear() {
+        var names = Names()
+        names.setName(" Home ", forSpaceKey: "U-1", liveKeys: [])
+        XCTAssertEqual(names.storedName(forSpaceKey: "U-1"), "Home")
+        names.setName("", forSpaceKey: "U-1", liveKeys: [])
+        XCTAssertNil(names.storedName(forSpaceKey: "U-1"))
+    }
+
     func testValidatesStoredValues() {
         let stored: [String: Any] = ["space:ok": "HOME", "space:num": 5, "space:long": String(repeating: "y", count: 99),
                                      "": "empty-key", "space:blank": "  "]

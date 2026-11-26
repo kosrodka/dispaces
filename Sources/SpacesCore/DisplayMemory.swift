@@ -38,12 +38,15 @@ public struct DisplayMemory: Equatable, Sendable {
         public var spaces: [RememberedSpace]
         /// When it was last connected, seconds since 1970.
         public var lastSeen: Double
+        /// The Mac's built-in display (decides whether its first Space is shown).
+        public var builtIn: Bool
 
-        public init(identifier: String, name: String, spaces: [RememberedSpace], lastSeen: Double) {
+        public init(identifier: String, name: String, spaces: [RememberedSpace], lastSeen: Double, builtIn: Bool = false) {
             self.identifier = identifier
             self.name = name
             self.spaces = spaces
             self.lastSeen = lastSeen
+            self.builtIn = builtIn
         }
 
         public var nameKey: String { "display:" + identifier }
@@ -76,7 +79,9 @@ public struct DisplayMemory: Equatable, Sendable {
                       let spaceName = s["name"] as? String, spaceName.count <= Self.maxText else { return nil }
                 return RememberedSpace(key: key, managedID: spaceID, name: NameSanitizer.sanitize(spaceName))
             }
-            records[id] = Record(identifier: id, name: NameSanitizer.sanitize(name), spaces: spaces, lastSeen: lastSeen)
+            // Older records have no "builtIn"; they (and anything malformed) read as external.
+            records[id] = Record(identifier: id, name: NameSanitizer.sanitize(name), spaces: spaces, lastSeen: lastSeen,
+                                 builtIn: entry["builtIn"] as? Bool ?? false)
         }
     }
 
@@ -86,6 +91,7 @@ public struct DisplayMemory: Equatable, Sendable {
             [
                 "name": record.name,
                 "lastSeen": record.lastSeen,
+                "builtIn": record.builtIn,
                 "spaces": record.spaces.map { ["key": $0.key, "id": NSNumber(value: $0.managedID), "name": $0.name] as [String: Any] },
             ] as [String: Any]
         }
@@ -109,7 +115,8 @@ public struct DisplayMemory: Equatable, Sendable {
     /// - Returns: true when something changed and should be saved.
     @discardableResult
     public mutating func update(with snapshot: Snapshot, displayName: (Display) -> String,
-                                spaceName: (Space) -> String, now: Double) -> Bool {
+                                spaceName: (Space) -> String, isBuiltIn: (Display) -> Bool = { _ in false },
+                                now: Double) -> Bool {
         guard !snapshot.isEmpty, !snapshot.displays.contains(where: \.spansAllDisplays) else { return false }
         let ghosts = disconnected(in: snapshot)
         var changed = false
@@ -122,9 +129,11 @@ public struct DisplayMemory: Equatable, Sendable {
             var record = records[display.identifier]
                 ?? Record(identifier: display.identifier, name: name, spaces: [], lastSeen: 0)
             let stale = now - record.lastSeen >= Self.touchInterval
-            if record.name != name || record.spaces != spaces || stale {
+            let builtIn = isBuiltIn(display)
+            if record.name != name || record.spaces != spaces || record.builtIn != builtIn || stale {
                 record.name = name
                 record.spaces = spaces
+                record.builtIn = builtIn
                 record.lastSeen = now
                 records[display.identifier] = record
                 changed = true

@@ -9,8 +9,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var switcher = SpaceSwitcher(monitor: monitor)
     private lazy var bar = BarController(prefs: prefs, monitor: monitor, switcher: switcher)
     private let menu = NSMenu()
-    /// The Space that was right-clicked to open the menu, offered for renaming.
-    private var menuSpaceID: UInt64?
+    /// The tile that was right-clicked to open the menu, offered for renaming.
+    private var menuTarget: TileTarget?
     private lazy var manageWindow = ManageWindowController(bar: bar)
     private lazy var manualWindow = ManualWindowController()
     /// Connected displays, to notice one being plugged in or unplugged.
@@ -21,7 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         menu.delegate = self
-        bar.onMenu = { [weak self] spaceID, view in self?.openMenu(spaceID: spaceID, under: view) }
+        bar.onMenu = { [weak self] target, view in self?.openMenu(target: target, under: view) }
         bar.needsAttention = { [weak self] in self?.setupIssues().isEmpty == false }
         bar.onWarningClick = { [weak self] in self?.showSetupCheck() }
         monitor.onRefresh = { [weak self] snapshot in self?.bar.show(snapshot) }
@@ -59,24 +59,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Opens the menu just under the tiles (right-click, Control-click, or a
     /// click between displays).
-    private func openMenu(spaceID: UInt64?, under view: NSView) {
-        menuSpaceID = spaceID
+    private func openMenu(target: TileTarget?, under view: NSView) {
+        menuTarget = target
         _ = menu.popUp(positioning: nil, at: NSPoint(x: 0, y: -4), in: view)
-        menuSpaceID = nil
+        menuTarget = nil
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        if let id = menuSpaceID, let name = bar.spaceName(id) {
+        if let target = menuTarget, let name = bar.tileName(target) {
             let item = NSMenuItem(title: "Rename “\(name)”…", action: #selector(renameSpace(_:)), keyEquivalent: "")
             item.target = self
-            item.representedObject = NSNumber(value: id)
+            item.representedObject = TargetBox(target)
             menu.addItem(item)
             menu.addItem(.separator())
         }
         add(menu, "Floating bar when the menu bar item is hidden", #selector(toggleFallback), checked: bar.showsFallback)
         add(menu, "Show apps on hover", #selector(toggleAppsOnHover), checked: bar.showsAppsOnHover)
-        add(menu, "Option-drag windows to Spaces", #selector(toggleDragWindows), checked: prefs.dragWindows)
+        add(menu, "Option-Control-drag windows to Spaces", #selector(toggleDragWindows), checked: prefs.dragWindows)
         add(menu, "Launch at login", #selector(toggleLogin), checked: SMAppService.mainApp.status == .enabled)
         menu.addItem(.separator())
         add(menu, "Manage displays and spaces", #selector(showManageWindow))
@@ -105,8 +105,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleFallback() { bar.setShowsFallback(!bar.showsFallback) }
     @objc private func renameSpace(_ sender: NSMenuItem) {
-        guard let id = (sender.representedObject as? NSNumber)?.uint64Value else { return }
-        bar.renameSpace(id: id)
+        guard let box = sender.representedObject as? TargetBox else { return }
+        bar.rename(box.target)
     }
     @objc private func refreshNow() { bar.refreshNow() }
     @objc private func showManageWindow() { manageWindow.show() }
@@ -205,5 +205,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             break
         }
         bar.redraw()
+    }
+}
+
+/// Carries a tile through a menu item's `representedObject`.
+final class TargetBox: NSObject {
+    let target: TileTarget
+
+    init(_ target: TileTarget) {
+        self.target = target
     }
 }

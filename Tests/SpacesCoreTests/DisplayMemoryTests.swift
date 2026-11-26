@@ -39,6 +39,34 @@ final class DisplayMemoryTests: XCTestCase {
         XCTAssertNil(memory.ghostOwner(of: afterUnplug.displays[0].spaces[0], in: afterUnplug))
     }
 
+    func testRemembersBuiltIn() {
+        var memory = DisplayMemory()
+        memory.update(with: Fixtures.twoDisplaysSnapshot, displayName: { $0.identifier }, spaceName: { "\($0.managedID)" },
+                      isBuiltIn: { $0.identifier == "AAAA-1111" }, now: 1000)
+        XCTAssertEqual(memory.records["AAAA-1111"]?.builtIn, true)
+        XCTAssertEqual(memory.records["BBBB-2222"]?.builtIn, false)
+        XCTAssertEqual(DisplayMemory(stored: memory.stored), memory, "builtIn survives a round trip")
+    }
+
+    func testBuiltInChangeIsSaved() {
+        var memory = DisplayMemory()
+        remember(Fixtures.twoDisplaysSnapshot, into: &memory)
+        let changed = memory.update(with: Fixtures.twoDisplaysSnapshot, displayName: { "Name " + $0.identifier.prefix(4) },
+                                    spaceName: { "Desk \($0.managedID)" }, isBuiltIn: { _ in true }, now: 1001)
+        XCTAssertTrue(changed)
+        XCTAssertEqual(memory.records["AAAA-1111"]?.builtIn, true)
+    }
+
+    func testOldRecordsWithoutBuiltInReadAsExternal() {
+        let stored: [String: Any] = ["BBBB-2222": ["name": "Ext", "lastSeen": NSNumber(value: 5),
+                                                   "spaces": [["key": "U-5", "id": NSNumber(value: 5), "name": "Home"]]] as [String: Any]]
+        XCTAssertEqual(DisplayMemory(stored: stored).records["BBBB-2222"]?.builtIn, false)
+        var bad = stored
+        bad["BBBB-2222"] = ["name": "Ext", "lastSeen": NSNumber(value: 5), "builtIn": NSNumber(value: 3),
+                            "spaces": [] as [Any]] as [String: Any]
+        XCTAssertEqual(DisplayMemory(stored: bad).records["BBBB-2222"]?.builtIn, false)
+    }
+
     func testReconnectingRefreshesTheRecord() {
         var memory = DisplayMemory()
         remember(Fixtures.twoDisplaysSnapshot, into: &memory)

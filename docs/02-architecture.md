@@ -53,11 +53,11 @@ The keyboard-shortcut method has one more advantage: the app can **read** your s
 │     ├─ SpaceMonitor ── on change ─▶ BarController         NameStore    names, sanitising, JSON    │
 │     │    • NSWorkspace activeSpaceDidChange               Hotkeys      parse symbolichotkeys      │
 │     │    • screen parameters change, wake                 SwitchPlanner Space → keys to press     │
-│     │    • 60 s timer (safety net)                                                                │
+│     │    • 60 s timer (safety net)                        LogicalSpaces names → logical spaces    │
 │     │    └─ SpaceReader ──▶ CGSPrivate (C) ──▶ CGSCopyManagedDisplaySpaces (read-only)            │
 │     │                                                                                             │
 │     ├─ BarController ── MenuBarItem (NSStatusItem + SpaceTilesView); FallbackBar (NSPanel) when   │
-│     │    the item is off screen; apps column, Option-drag, rename                                 │
+│     │    the item is off screen; apps column, Option-Control drag, rename                         │
 │     │                                                                                             │
 │     ├─ SpaceSwitcher ── plans with SwitchPlanner, posts CGEvents, verifies, retries once          │
 │     │    └─ KeyPoster ──▶ CGEvent.post(.cghidEventTap)   (needs Accessibility)                    │
@@ -86,8 +86,16 @@ The keyboard-shortcut method has one more advantage: the app can **read** your s
    - Otherwise → don't press anything; explain why.
 2. `KeyPoster` posts the key events with exactly the key code and modifiers stored in your shortcut settings.
 3. `SpaceSwitcher` re-reads the Space list every 50 ms for up to 1 s. Success = that display's current Space is the target.
-4. Not switched → one retry after 300 ms → still not switched → amber outline on the tile and a message with the exact fix.
+4. Not switched → one retry after 300 ms → still not switched → red ring on the tile and a message with the exact fix.
 5. Clicks while a switch is in progress are ignored, so fast clicking can't queue a storm of keystrokes.
+
+**Switch a logical space (click on a numbered tile)**
+1. `LogicalSpaces` (rebuilt on every refresh from the Space names) gives the column: one Space per display at most.
+2. Option-click: only the display under the pointer, as a single switch (above); a message if it has no Space in the column.
+3. Otherwise `SwitchPlanner.order` lists the displays not showing their Space yet, the display under the pointer last.
+4. `SpaceSwitcher.switchAll` switches them one after another, each planned on a fresh read and verified as above; a failure doesn't stop the others.
+5. If the clicked display's Space is showing but doesn't have the focus (`CGSGetActiveSpace`), its own shortcut is pressed once more (`SwitchPlanner.refocusPlan`), so the focus stays where the user clicked.
+6. Any failure: red ring on the tile and a message naming the display and the fix.
 
 **Rename**
 Right-click a tile › Rename, or double-click in the Manage window → small dialog → name cleaned by `NameStore.sanitize` (trim, max 24 characters, control and text-direction override characters removed) → saved to the app's own preferences → tiles redraw.
@@ -99,6 +107,9 @@ Right-click a tile › Rename, or double-click in the Manage window → small di
 | Display | macOS display UUID (`CGDisplayCreateUUIDFromDisplayID`, same value as the Space list's "Display Identifier"); `Main` when Spaces span displays | Reboots, re-plugging, changing ports |
 | Space | The Space's `uuid` from the Space list | Reboots, reordering Spaces |
 | Space whose `uuid` is empty (macOS leaves it empty for the first desktop of a display) | display UUID + position, e.g. `…#1` | Reboots. Moves with position if you reorder |
+| Logical space | Nothing stored: worked out from the Space names on every refresh (same name, ignoring case = same logical space) | As long as the names do |
+| Unplugged display was built-in | `builtIn` in its `displayMemory` record | Reboots |
+| First Space shown | `firstSpaceBuiltIn` (default on) and `firstSpaceExternal` (default off), set only with `defaults write` | Everything |
 
 Deleting a Space in Mission Control leaves its old name unused in preferences; it is ignored. Old entries are capped at 256 so the file can't grow forever.
 

@@ -2,11 +2,12 @@ import AppKit
 import SpacesCore
 
 /// Keeps the Spaces in the menu bar in sync with the snapshot: one menu bar
-/// item with a square tile per Space, each display's Spaces as a group, the
-/// displays in their left-to-right arrangement. When macOS isn't showing the
-/// item (no room beside the notch, a hidden menu bar, switched off in System
-/// Settings), a small floating bar with the same tiles stands in, unless the
-/// user turned that off.
+/// item with a square tile per logical space (the Spaces with one name across
+/// displays), then the full-screen Spaces, then the Spaces of unplugged
+/// displays as dimmed groups. When macOS isn't showing the item (no room
+/// beside the notch, a hidden menu bar, switched off in System Settings), a
+/// small floating bar with the same tiles stands in, unless the user turned
+/// that off.
 @MainActor
 final class BarController {
     private let menuItem = MenuBarItem()
@@ -14,7 +15,7 @@ final class BarController {
     private let messagePanel = MessagePanel()
     private let appsPanel = AppsPanel()
     /// The tile whose apps are showing (or about to), and the pending show.
-    private var hoveredSpaceID: UInt64?
+    private var hoveredTarget: TileTarget?
     private var hoverWork: DispatchWorkItem?
     private let prefs: Preferences
     private let switcher: SpaceSwitcher
@@ -22,9 +23,12 @@ final class BarController {
 
     private var snapshot = Snapshot.empty
     private var content = TilesContent()
-    private var failedSpaceID: UInt64?
+    /// The logical spaces the tiles show, worked out on every redraw.
+    private(set) var logical = LogicalSpaces(snapshot: .empty, memory: DisplayMemory(), names: Names(),
+                                             screenOrder: [], showsFirstSpace: { _ in true })
+    private var failedTarget: TileTarget?
     private var failedClear: DispatchWorkItem?
-    /// Option-drag: the tile a held window is resting on.
+    /// Option-Control drag: the tile a held window is resting on.
     private var arming = DragArming()
     private var dragTimer: Timer?
     /// Checks every few seconds whether the menu bar item is on screen.
@@ -35,8 +39,8 @@ final class BarController {
     static let fallbackDelay: TimeInterval = 1
     var needsAttention: () -> Bool = { false }
     var onWarningClick: (() -> Void)?
-    /// Open the app's menu under a view; the Space that was right-clicked, if any.
-    var onMenu: ((UInt64?, NSView) -> Void)?
+    /// Open the app's menu under a view; the tile that was right-clicked, if any.
+    var onMenu: ((TileTarget?, NSView) -> Void)?
 
     init(prefs: Preferences, monitor: SpaceMonitor, switcher: SpaceSwitcher) {
         self.prefs = prefs
@@ -44,12 +48,12 @@ final class BarController {
         self.switcher = switcher
         appsPanel.onExit = { [weak self] in self?.hideAppsSoon() }
         for view in [menuItem.view, fallback.tiles] {
-            view.onClick = { [weak self] id in self?.click(id) }
+            view.onClick = { [weak self] target, thisDisplayOnly in self?.click(target, thisDisplayOnly: thisDisplayOnly) }
             view.onWarning = { [weak self] in self?.onWarningClick?() }
-            view.onMenu = { [weak self, weak view] id, _ in
+            view.onMenu = { [weak self, weak view] target, _ in
                 guard let self, let view else { return }
                 self.hideApps()
-                self.onMenu?(id, view)
+                self.onMenu?(target, view)
             }
             view.onHover = { [weak self] tile, inside in self?.hover(tile, inside: inside) }
         }
@@ -78,13 +82,18 @@ final class BarController {
     /// Called after the Spaces, names or remembered displays may have changed.
     var onChange: (() -> Void)?
 
+    /// Display identifiers in macOS's display order (the menu-bar display first).
+    private static func screenOrder() -> [String] {
+        NSScreen.screens.compactMap(Screens.identifier(of:))
+    }
+
     // MARK: Displays and Spaces window
 
     /// Every display with its Spaces: connected ones first, in macOS's display
     /// order (the menu-bar display first), then disconnected ones.
     func overview() -> DisplayOverview {
         DisplayOverview(snapshot: snapshot, memory: prefs.memory, names: prefs.names,
-                        screenOrder: NSScreen.screens.compactMap(Screens.identifier(of:)),
+                        screenOrder: Self.screenOrder(),
                         showsFirstSpace: { self.showsFirstSpace($0) }) { [names = prefs.names] in
             Self.displayName($0, names: names)
         }
@@ -111,15 +120,16 @@ final class BarController {
         redraw()
     }
 
-    /// Whether a display's first Space is shown in the menu bar and in the Manage window.
+    /// Whether a display's first Space is shown (in the menu bar, the logical
+    /// spaces and the Manage window): the built-in display's yes, external
+    /// displays' no, unless changed in the preferences file.
     func showsFirstSpace(_ identifier: String) -> Bool {
-        identifier == Display.combinedIdentifier
-            || prefs.firstSpaces.isShown(identifier)
+        prefs.firstSpaceRule.isShown(identifier: identifier, builtIn: isBuiltIn(identifier))
     }
 
-    func setShowsFirstSpace(_ shown: Bool, for identifier: String) {
-        prefs.updateFirstSpaces { $0.set(shown, for: identifier) }
-        redraw()
+    /// A connected display asks macOS; an unplugged one goes by what was remembered.
+    private func isBuiltIn(_ identifier: String) -> Bool {
+        Screens.isBuiltIn(identifier) ?? prefs.memory.records[identifier]?.builtIn ?? false
     }
 
     /// Tiles shown outside the menu bar (the Manage window), for the hover column.
@@ -156,18 +166,20 @@ final class BarController {
             prefs.updateMemory { memory in
                 memory.update(with: snapshot,
                               displayName: { Self.displayName($0, names: names) },
-                              spaceName: { names.name(for: $0) }, now: now)
+                              spaceName: { names.name(for: $0) },
+                              isBuiltIn: { Screens.isBuiltIn($0.identifier) ?? false }, now: now)
             }
-            let focusedDisplay = snapshot.focusedDisplay?.identifier ?? Screens.focusedIdentifier()
-            for display in orderedDisplays() where !display.spaces.isEmpty {
-                let onFocused = snapshot.displays.count == 1 || Screens.matches(focusedDisplay, display)
-                let group = groupModel(for: display, names: names, onFocused: onFocused)
-                content.runs.append(.init(count: group.tiles.count, spacing: .group))
-                content.entries += group.tiles.map { .init(tile: $0, dimmed: false) }
-                for ghost in group.ghosts {
-                    content.runs.append(.init(count: ghost.tiles.count, spacing: .subgroup))
-                    content.entries += ghost.tiles.map { .init(tile: $0, dimmed: true) }
-                }
+            logical = LogicalSpaces(snapshot: snapshot, memory: prefs.memory, names: names,
+                                    screenOrder: Self.screenOrder(), showsFirstSpace: { self.showsFirstSpace($0) })
+            content.runs.append(.init(count: logical.columns.count, spacing: .group))
+            content.entries += logical.columns.map { .init(tile: logicalTile($0, names: names), dimmed: false) }
+            content.runs.append(.init(count: logical.fullScreen.count, spacing: .group))
+            content.entries += logical.fullScreen.map {
+                .init(tile: spaceTile($0.space, current: $0.isCurrent, names: names, remembered: nil), dimmed: false)
+            }
+            for ghost in ghostGroups(names: names) {
+                content.runs.append(.init(count: ghost.count, spacing: .subgroup))
+                content.entries += ghost.map { .init(tile: $0, dimmed: true) }
             }
             let current = content.entries.filter { $0.tile.state != .normal }.map(\.tile.name)
             content.summary = "Dispaces Spaces" + (current.isEmpty ? "" : ", current: " + current.joined(separator: ", "))
@@ -178,64 +190,73 @@ final class BarController {
         menuItem.update(content, showsToolTips: tips)
         fallback.update(content, showsToolTips: tips)
         // Tiles were redrawn: drop the column if the pointer isn't on that tile any more.
-        if hoveredSpaceID != nil, !pointerOnApps() {
+        if hoveredTarget != nil, !pointerOnApps() {
             hideApps()
         }
         checkFallback()
     }
 
-    /// Displays left to right, as they're arranged in System Settings › Displays.
-    private func orderedDisplays() -> [Display] {
-        let far = CGFloat.greatestFiniteMagnitude
-        return snapshot.displays.enumerated().sorted { a, b in
-            let ax = Screens.screen(for: a.element)?.frame.minX ?? far
-            let bx = Screens.screen(for: b.element)?.frame.minX ?? far
-            return ax != bx ? ax < bx : a.offset < b.offset
-        }.map(\.element)
+    private func logicalTile(_ column: LogicalSpaces.Column, names: Names) -> TileModel {
+        let target = TileTarget.logical(column.key)
+        var label = "\(column.title), logical space \(column.number)"
+        switch column.state {
+        case .all:
+            label += column.cells.count > 1 ? ", on all displays" : ", current"
+        case .some:
+            label += ", on " + column.cells.filter(\.isCurrent).map { displayName(of: $0.display, names: names) }
+                .joined(separator: ", ")
+        case .none:
+            break
+        }
+        return TileModel(target: target, number: String(column.number), name: column.title,
+                         state: column.state == .all ? .all : (column.state == .some ? .some : .normal),
+                         isFullScreen: false, failed: failedTarget == target, armed: arming.armed == target,
+                         accessibilityLabel: label)
     }
 
-    private func groupModel(for display: Display, names: Names, onFocused: Bool) -> GroupModel {
+    private func spaceTile(_ space: Space, current: Bool, names: Names,
+                           remembered: DisplayMemory.RememberedSpace?) -> TileModel {
+        let target = TileTarget.space(space.managedID)
+        let name = DisplayOverview.spaceName(space, names: names, remembered: remembered,
+                                             fallbackAppName: Self.fullScreenAppName(space))
+        let kind = space.kind == .desktop ? "Desktop \(space.numberLabel)" : "Full-screen Space"
+        return TileModel(target: target, number: space.numberLabel, name: name, state: current ? .all : .normal,
+                         isFullScreen: space.kind == .fullscreen, failed: failedTarget == target,
+                         armed: arming.armed == target,
+                         accessibilityLabel: "\(kind), \(name)" + (current ? ", current on its display" : ""))
+    }
+
+    /// Spaces of unplugged displays that macOS moved onto connected displays,
+    /// one group per unplugged display (each Space switches only itself).
+    private func ghostGroups(names: Names) -> [[TileModel]] {
         let memory = prefs.memory
-        func tile(_ space: Space, remembered: DisplayMemory.RememberedSpace?) -> TileModel {
-            let isCurrent = display.currentSpaceID == space.managedID
-            let name = DisplayOverview.spaceName(space, names: names, remembered: remembered,
-                                                 fallbackAppName: Self.fullScreenAppName(space))
-            let kind = space.kind == .desktop ? "Desktop \(space.numberLabel)" : "Full-screen Space"
-            return TileModel(
-                spaceID: space.managedID, number: space.numberLabel, name: name,
-                state: isCurrent ? (onFocused ? .focused : .current) : .normal,
-                isFullScreen: space.kind == .fullscreen,
-                failed: space.managedID == failedSpaceID,
-                armed: space.managedID == arming.armedSpaceID,
-                accessibilityLabel: "\(kind), \(name)" + (isCurrent ? ", current on this display" : ""))
-        }
-        // Spaces that belong to a disconnected display go into that display's group.
-        var own: [TileModel] = []
-        var ghosts: [(record: DisplayMemory.Record, tiles: [TileModel])] = []
-        let hiddenFirst = showsFirstSpace(display.identifier) ? nil : display.spaces.first?.managedID
-        for space in display.spaces where space.managedID != hiddenFirst {
-            guard !display.spansAllDisplays, let record = memory.ghostOwner(of: space, in: snapshot) else {
-                own.append(tile(space, remembered: nil))
-                continue
-            }
-            let remembered = record.spaces.first { $0.matches(space) }
-            // The disconnected display's own first Space follows its setting.
-            if let first = record.spaces.first, first == remembered, !showsFirstSpace(record.identifier) { continue }
-            if let index = ghosts.firstIndex(where: { $0.record.identifier == record.identifier }) {
-                ghosts[index].tiles.append(tile(space, remembered: remembered))
-            } else {
-                ghosts.append((record, [tile(space, remembered: remembered)]))
+        var groups: [(identifier: String, tiles: [TileModel])] = []
+        for display in LogicalSpaces.orderedDisplays(snapshot, screenOrder: Self.screenOrder())
+        where !display.spansAllDisplays {
+            for space in display.spaces {
+                guard let record = memory.ghostOwner(of: space, in: snapshot) else { continue }
+                let remembered = record.spaces.first { $0.matches(space) }
+                // The disconnected display's own first Space follows the first-Space rule.
+                if let first = record.spaces.first, first == remembered, !showsFirstSpace(record.identifier) { continue }
+                let tile = spaceTile(space, current: display.currentSpaceID == space.managedID, names: names,
+                                     remembered: remembered)
+                if let index = groups.firstIndex(where: { $0.identifier == record.identifier }) {
+                    groups[index].tiles.append(tile)
+                } else {
+                    groups.append((record.identifier, [tile]))
+                }
             }
         }
-        return GroupModel(displayKey: display.nameKey,
-                          label: Self.displayName(display, names: names),
-                          tiles: own,
-                          ghosts: ghosts.map { .init(label: DisplayOverview.displayName($0.record, names: names), tiles: $0.tiles) })
+        return groups.map(\.tiles)
     }
 
     /// A display's name: the user's, else the one macOS gives it.
     private static func displayName(_ display: Display, names: Names) -> String {
         names.name(for: display, defaultName: Screens.defaultName(for: display))
+    }
+
+    private func displayName(of identifier: String, names: Names) -> String {
+        snapshot.displays.first { $0.identifier == identifier }.map { Self.displayName($0, names: names) } ?? identifier
     }
 
     /// The app filling a full-screen Space, when macOS reports its process.
@@ -251,9 +272,9 @@ final class BarController {
         monitor.refresh()
     }
 
-    /// The name shown for a Space (for the menu's Rename item).
-    func spaceName(_ spaceID: UInt64) -> String? {
-        content.entries.first { $0.tile.spaceID == spaceID }?.tile.name
+    /// The name shown on a tile (for the menu's Rename item).
+    func tileName(_ target: TileTarget) -> String? {
+        content.entries.first { $0.tile.target == target }?.tile.name
     }
 
     // MARK: Fallback bar
@@ -273,7 +294,7 @@ final class BarController {
             fallbackWork = nil
             if fallback.isVisible {
                 fallback.orderOut(nil)
-                if let id = hoveredSpaceID, fallback.tiles.content.entries.contains(where: { $0.tile.spaceID == id }) {
+                if let target = hoveredTarget, fallback.tiles.content.entries.contains(where: { $0.tile.target == target }) {
                     hideApps()
                 }
             }
@@ -309,25 +330,25 @@ final class BarController {
         redraw()
     }
 
-    /// Shows the apps on a tile's Space after a short rest, so sweeping across the tiles stays quiet.
+    /// Shows the apps on a tile's Space(s) after a short rest, so sweeping across the tiles stays quiet.
     /// The column stays while the pointer is on the tile or on the column.
     func hover(_ tile: HoverTile, inside: Bool) {
-        let spaceID = tile.spaceID
+        let target = tile.target
         guard inside else {
-            if hoveredSpaceID == spaceID { hideAppsSoon() }
+            if hoveredTarget == target { hideAppsSoon() }
             return
         }
         // Back on the tile from its own column: keep it.
-        if hoveredSpaceID == spaceID && appsPanel.isVisible { return }
+        if hoveredTarget == target && appsPanel.isVisible { return }
         hideApps()
         guard prefs.showAppsOnHover, NSEvent.pressedMouseButtons == 0 else { return }
-        hoveredSpaceID = spaceID
+        hoveredTarget = target
         let work = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, self.hoveredSpaceID == spaceID, NSEvent.pressedMouseButtons == 0,
-                      self.pointerIsOn(spaceID) else { return }
-                self.appsPanel.onPick = { [weak self] app in self?.bringToFront(app, on: spaceID) }
-                self.appsPanel.show(title: tile.name, apps: SpaceAppsReader.apps(on: spaceID), tile: tile.frame,
+                guard let self, self.hoveredTarget == target, NSEvent.pressedMouseButtons == 0,
+                      self.pointerIsOn(target) else { return }
+                self.appsPanel.onPick = { [weak self] app in self?.bringToFront(app, on: target) }
+                self.appsPanel.show(title: tile.name, sections: self.appSections(for: target), tile: tile.frame,
                                     screen: tile.screen)
             }
         }
@@ -335,38 +356,61 @@ final class BarController {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
     }
 
+    /// The apps on a tile's Space, or on each display's Space of a logical space
+    /// (under the display's name when there are several).
+    private func appSections(for target: TileTarget) -> [AppsPanel.Section] {
+        switch target {
+        case .space(let id):
+            return [.init(heading: nil, apps: SpaceAppsReader.apps(on: id))]
+        case .logical(let key):
+            guard let column = logical.column(key: key) else { return [] }
+            let apps = SpaceAppsReader.apps(on: column.cells.map(\.space.managedID))
+            let names = prefs.names
+            return column.cells.map { cell in
+                .init(heading: column.cells.count > 1 ? displayName(of: cell.display, names: names) : nil,
+                      apps: apps[cell.space.managedID] ?? [])
+            }
+        }
+    }
+
     /// True while the pointer is on the hovered tile or on its apps column.
     private func pointerOnApps() -> Bool {
         let point = NSEvent.mouseLocation
         guard !appsPanel.contains(point) else { return true }
-        return hoveredSpaceID.map(pointerIsOn) ?? false
+        return hoveredTarget.map(pointerIsOn) ?? false
     }
 
-    /// True while the pointer is on this Space's tile. The tile rows know it from
+    /// True while the pointer is on this tile. The tile rows know it from
     /// their own mouse events, which also arrive when macOS shows the menu bar
     /// item through another window (on Spaces other than the first).
-    private func pointerIsOn(_ spaceID: UInt64) -> Bool {
-        [menuItem.view, fallback.tiles].contains { $0.hoveredSpaceID == spaceID }
-            || extraTile?(NSEvent.mouseLocation)?.spaceID == spaceID
+    private func pointerIsOn(_ target: TileTarget) -> Bool {
+        [menuItem.view, fallback.tiles].contains { $0.hoveredTarget == target }
+            || extraTile?(NSEvent.mouseLocation)?.target == target
     }
 
     /// Hides the column unless the pointer is on its way from the tile into it (or back).
     private func hideAppsSoon() {
-        let spaceID = hoveredSpaceID
+        let target = hoveredTarget
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, self.hoveredSpaceID == spaceID, !self.pointerOnApps() else { return }
+                guard let self, self.hoveredTarget == target, !self.pointerOnApps() else { return }
                 self.hideApps()
             }
         }
     }
 
-    /// Clicked in the apps column: show that Space, then bring the app to the front,
-    /// as clicking it in the Dock would. Only ever on the user's click.
-    private func bringToFront(_ app: NSRunningApplication, on spaceID: UInt64) {
+    /// Clicked in the apps column: show that Space (every display's, for a
+    /// logical space), then bring the app to the front, as clicking it in the
+    /// Dock would. Only ever on the user's click.
+    private func bringToFront(_ app: NSRunningApplication, on target: TileTarget) {
         hideApps()
         Task { @MainActor in
-            await switchSpace(spaceID)
+            switch target {
+            case .space(let id):
+                await switchSpace(id, flashing: target)
+            case .logical(let key):
+                if let column = logical.column(key: key) { _ = await switchLogical(column) }
+            }
             AppActivator.bringToFront(app)
         }
     }
@@ -379,7 +423,7 @@ final class BarController {
         messagePanel.orderOut(nil)
         failedClear?.cancel()
         failedClear = nil
-        failedSpaceID = nil
+        failedTarget = nil
         arming = DragArming()
         fallback.orderOut(nil)
         fallbackWork?.cancel()
@@ -390,39 +434,101 @@ final class BarController {
     func hideApps() {
         hoverWork?.cancel()
         hoverWork = nil
-        hoveredSpaceID = nil
+        hoveredTarget = nil
         appsPanel.orderOut(nil)
     }
 
-    /// Switches to a Space; `switched` runs once macOS has made it current.
-    func click(_ spaceID: UInt64, switched: (() -> Void)? = nil) {
-        hideApps()
-        Task { @MainActor in
-            if await switchSpace(spaceID) == .switched { switched?() }
+    // MARK: Switching
+
+    /// A tile was clicked. A logical space switches every display that has a
+    /// Space in it, or with `thisDisplayOnly` (Option-click) only the display
+    /// under the pointer; a single tile switches its own Space.
+    /// `switched` runs once macOS has made the change.
+    func click(_ target: TileTarget, thisDisplayOnly: Bool, switched: (() -> Void)? = nil) {
+        switch target {
+        case .space(let id):
+            click(id, flashing: target, switched: switched)
+        case .logical(let key):
+            guard let column = logical.column(key: key) else { return }
+            hideApps()
+            if thisDisplayOnly, let display = pointerDisplay() {
+                guard let cell = column.cell(on: display.identifier) else {
+                    showMessage(SwitchPlanner.noSpaceMessage(display: Self.displayName(display, names: prefs.names),
+                                                             title: column.title))
+                    return
+                }
+                click(cell.space.managedID, flashing: target, switched: switched)
+                return
+            }
+            Task { @MainActor in
+                if await switchLogical(column) { switched?() }
+            }
         }
     }
 
-    /// Switches to a Space; if that fails, marks its tile and says why under the tiles.
+    /// Switches to one Space; `switched` runs once macOS has made it current.
+    /// A failure marks the `flashing` tile.
+    func click(_ spaceID: UInt64, flashing: TileTarget? = nil, switched: (() -> Void)? = nil) {
+        hideApps()
+        Task { @MainActor in
+            if await switchSpace(spaceID, flashing: flashing ?? .space(spaceID)) == .switched { switched?() }
+        }
+    }
+
+    /// The display under the pointer (the one whose menu bar was clicked), or
+    /// the one Space list when Spaces span all displays.
+    private func pointerDisplay() -> Display? {
+        if let only = snapshot.displays.first, only.spansAllDisplays { return only }
+        let pointer = Screens.pointerIdentifier()
+        return snapshot.displays.first { Screens.matches(pointer, $0) }
+    }
+
+    /// Switches to a Space; if that fails, marks the tile and says why under the tiles.
     @discardableResult
-    private func switchSpace(_ spaceID: UInt64) async -> SpaceSwitcher.Outcome {
+    private func switchSpace(_ spaceID: UInt64, flashing target: TileTarget) async -> SpaceSwitcher.Outcome {
         let outcome = await switcher.switchTo(spaceID: spaceID)
-        if case .failed(let message) = outcome { flashFailure(spaceID: spaceID, message: message) }
+        if case .failed(let message) = outcome { flashFailure(target, message: message) }
         return outcome
     }
 
-    // MARK: Option-drag
+    /// Switches every display with a Space in `column` to it, one after another,
+    /// the display under the pointer last so it keeps the focus. Returns true
+    /// when every display got there; otherwise marks the tile and names the
+    /// first display that didn't switch, and why.
+    private func switchLogical(_ column: LogicalSpaces.Column) async -> Bool {
+        let pointer = pointerDisplay()
+        let targets = SwitchPlanner.order(column.cells, pointerDisplay: pointer?.identifier)
+        let focusOn = SwitchPlanner.focusTarget(column, pointerDisplay: pointer)
+        guard let results = await switcher.switchAll(targets.map(\.space.managedID), focusOn: focusOn) else {
+            return false
+        }
+        for result in results {
+            guard case .failed(let message) = result.outcome else { continue }
+            var text = message
+            if snapshot.displays.count > 1, message != SwitchPlanner.permissionMessage,
+               let display = snapshot.locate(spaceID: result.spaceID)?.display {
+                text = Self.displayName(display, names: prefs.names) + ": " + message
+            }
+            flashFailure(.logical(column.key), message: text)
+            return false
+        }
+        return true
+    }
 
-    /// Starts or stops watching for a window being Option-dragged onto a tile.
+    // MARK: Option-Control drag
+
+    /// Starts or stops watching for a window being Option-Control-dragged onto a tile.
     ///
     /// Only reads the pointer position, mouse buttons and modifier keys through
     /// public `NSEvent` class properties: no event tap, no global monitor, no
     /// permission. The user physically holds the window; when the pointer rests
-    /// on a desktop tile, the app presses that desktop's shortcut and macOS
-    /// carries the held window along. The app never touches the window.
+    /// on a tile, the app presses the desktop shortcut of that tile's Space on
+    /// the display under the pointer, and macOS carries the held window along.
+    /// The app never touches the window.
     func setDragWatching(_ on: Bool) {
         dragTimer?.invalidate()
         dragTimer = nil
-        if arming.armedSpaceID != nil {
+        if arming.armed != nil {
             arming = DragArming()
             redraw()
         }
@@ -436,34 +542,56 @@ final class BarController {
     }
 
     private func dragTick() {
-        let holding = NSEvent.pressedMouseButtons & 1 != 0 && NSEvent.modifierFlags.contains(.option)
-        var space: UInt64?
+        let holding = NSEvent.pressedMouseButtons & 1 != 0 && NSEvent.modifierFlags.contains([.option, .control])
+        var target: TileTarget?
         let point = NSEvent.mouseLocation
         if holding, let tile = visibleRows.lazy.compactMap({ $0.hoverTile(atScreen: point) }).first,
-           content.entries.contains(where: { $0.tile.spaceID == tile.spaceID && !$0.tile.isFullScreen }) {
-            space = tile.spaceID
+           content.entries.contains(where: { $0.tile.target == tile.target && !$0.tile.isFullScreen }),
+           dragSpace(for: tile.target) != nil {
+            target = tile.target
         }
-        let before = arming.armedSpaceID
-        let fire = arming.update(holding: holding, spaceUnderPointer: space, now: ProcessInfo.processInfo.systemUptime)
-        if before != arming.armedSpaceID { redraw() }
-        if let fire { click(fire) }
+        let before = arming.armed
+        let fire = arming.update(holding: holding, target: target, now: ProcessInfo.processInfo.systemUptime)
+        if before != arming.armed { redraw() }
+        if let fire, let spaceID = dragSpace(for: fire) { click(spaceID, flashing: fire) }
     }
 
-    private func flashFailure(spaceID: UInt64, message: String) {
-        failedSpaceID = spaceID
+    /// The Space a drag onto this tile switches to: a single tile's own Space,
+    /// or the pointer display's Space of a logical space (nil when it has none).
+    private func dragSpace(for target: TileTarget) -> UInt64? {
+        switch target {
+        case .space(let id):
+            return id
+        case .logical(let key):
+            guard let display = pointerDisplay() else { return nil }
+            return logical.column(key: key)?.cell(on: display.identifier)?.space.managedID
+        }
+    }
+
+    // MARK: Messages
+
+    private func flashFailure(_ target: TileTarget, message: String) {
+        failedTarget = target
         redraw()
-        let anchor = fallback.isVisible ? fallback.frame : menuItem.view.screenFrame
-        if let anchor { messagePanel.show(message, below: anchor) }
+        showMessage(message)
         failedClear?.cancel()
         let work = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated {
-                self?.failedSpaceID = nil
+                self?.failedTarget = nil
                 self?.redraw()
             }
         }
         failedClear = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.5, execute: work)
     }
+
+    /// A short message under the tiles (or under the fallback bar while it's shown).
+    private func showMessage(_ message: String) {
+        let anchor = fallback.isVisible ? fallback.frame : menuItem.view.screenFrame
+        if let anchor { messagePanel.show(message, below: anchor) }
+    }
+
+    // MARK: Names
 
     private func liveKeys() -> Set<String> {
         var keys = Set<String>()
@@ -474,15 +602,46 @@ final class BarController {
         return keys
     }
 
-    func renameSpace(id: UInt64) {
-        guard let found = snapshot.locate(spaceID: id) else { return }
-        let space = found.space
-        let defaultName = Names.defaultName(for: space, fallbackAppName: Self.fullScreenAppName(space))
-        let current = prefs.names.spaces[space.nameKey] ?? ""
-        guard let typed = NamePrompt.ask(title: "Rename Space", current: current, defaultName: defaultName) else { return }
+    /// Asks for a new name: for one Space, or for a logical space, whose name
+    /// every Space in it then gets. Returns name key → typed name for each
+    /// Space to rename (empty: back to its default name), or nil when cancelled.
+    func askNames(for target: TileTarget) -> [String: String]? {
+        switch target {
+        case .space(let id):
+            guard let space = snapshot.locate(spaceID: id)?.space else { return nil }
+            let defaultName = Names.defaultName(for: space, fallbackAppName: Self.fullScreenAppName(space))
+            let current = prefs.names.storedName(forSpaceKey: space.nameKey) ?? ""
+            guard let typed = NamePrompt.ask(title: "Rename Space", current: current, defaultName: defaultName) else {
+                return nil
+            }
+            return [space.nameKey: typed]
+        case .logical(let key):
+            guard let column = logical.column(key: key) else { return nil }
+            let count = column.cells.count
+            let note = count > 1 ? "Renames this Space on all \(count) displays." : nil
+            guard let typed = NamePrompt.ask(title: "Rename “\(column.title)”", current: column.customName(in: prefs.names) ?? "",
+                                             defaultName: "Desktop N", note: note) else { return nil }
+            return Dictionary(column.cells.map { ($0.space.nameKey, typed) }, uniquingKeysWith: { first, _ in first })
+        }
+    }
+
+    /// Stores Space names (name key → name; empty clears) and returns what was
+    /// stored before in the same form, so the change can be undone.
+    @discardableResult
+    func applySpaceNames(_ changes: [String: String]) -> [String: String] {
+        var previous: [String: String] = [:]
+        for key in changes.keys { previous[key] = prefs.names.storedName(forSpaceKey: key) ?? "" }
         let keys = liveKeys()
-        prefs.updateNames { $0.setName(typed, for: space, liveKeys: keys) }
+        prefs.updateNames { names in
+            for (key, name) in changes { names.setName(name, forSpaceKey: key, liveKeys: keys) }
+        }
         redraw()
+        return previous
+    }
+
+    /// Rename from the menu (no undo there).
+    func rename(_ target: TileTarget) {
+        if let changes = askNames(for: target) { applySpaceNames(changes) }
     }
 
     func renameDisplay(key: String) {
@@ -506,7 +665,8 @@ final class BarController {
 /// The rename dialog.
 @MainActor
 enum NamePrompt {
-    static func ask(title: String, current: String, defaultName: String) -> String? {
+    /// `note`, when given, comes first in the dialog's text (e.g. that every display's Space is renamed).
+    static func ask(title: String, current: String, defaultName: String, note: String? = nil) -> String? {
         let previous = NSWorkspace.shared.frontmostApplication
         defer {
             // Give keyboard focus back to the app you were using.
@@ -515,7 +675,8 @@ enum NamePrompt {
         NSApp.activate()
         let alert = NSAlert()
         alert.messageText = title
-        alert.informativeText = "Up to \(NameSanitizer.maxLength) characters. Leave empty to use “\(defaultName)”."
+        alert.informativeText = (note.map { $0 + " " } ?? "")
+            + "Up to \(NameSanitizer.maxLength) characters. Leave empty to use “\(defaultName)”."
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
         field.stringValue = current
         field.placeholderString = defaultName

@@ -20,7 +20,7 @@ struct TilesContent: Equatable {
 
 /// A tile the pointer is resting on, for the apps column.
 struct HoverTile {
-    let spaceID: UInt64
+    let target: TileTarget
     let name: String
     /// The tile's frame on screen.
     let frame: NSRect
@@ -30,14 +30,16 @@ struct HoverTile {
 /// A row of small square Space tiles. Shown in the menu bar item and in the
 /// fallback bar. Draws itself, so it follows the menu bar's light or dark look.
 ///
-/// Click a tile: switch to it. Click the "!": Setup check. Right-click (or
-/// Control-click) anywhere, or click between displays: the Dispaces menu.
+/// Click a tile: switch to it (Option-click: only on the display under the
+/// pointer). Click the "!": Setup check. Right-click (or Control-click)
+/// anywhere, or click between groups: the Dispaces menu.
 @MainActor
 final class SpaceTilesView: NSView {
-    var onClick: ((UInt64) -> Void)?
+    /// A tile was clicked; true when only the display under the pointer should switch.
+    var onClick: ((TileTarget, _ thisDisplayOnly: Bool) -> Void)?
     var onWarning: (() -> Void)?
-    /// Open the menu; the Space under the pointer, if any, can be renamed from it.
-    var onMenu: ((UInt64?, NSEvent) -> Void)?
+    /// Open the menu; the tile under the pointer, if any, can be renamed from it.
+    var onMenu: ((TileTarget?, NSEvent) -> Void)?
     /// Pointer entered (true) or left (false) a tile.
     var onHover: ((HoverTile, Bool) -> Void)?
 
@@ -116,9 +118,15 @@ final class SpaceTilesView: NSView {
         return convert(event.locationInWindow, from: nil)
     }
 
-    private func spaceID(at hit: MenuBarGeometry.Hit) -> UInt64? {
+    private func target(at hit: MenuBarGeometry.Hit) -> TileTarget? {
         guard case .tile(let index) = hit, index < content.entries.count else { return nil }
-        return content.entries[index].tile.spaceID
+        return content.entries[index].tile.target
+    }
+
+    /// Option-click (without Control, which opens the menu) switches only the
+    /// display under the pointer.
+    private static func thisDisplayOnly(_ event: NSEvent) -> Bool {
+        event.modifierFlags.contains(.option) && !event.modifierFlags.contains(.control)
     }
 
     /// The tile under a point in screen coordinates, if this view is on screen and shows one there.
@@ -136,7 +144,7 @@ final class SpaceTilesView: NSView {
         // The whole height, so the apps column opens just under the menu bar.
         let rect = NSRect(x: tileRect(index).minX, y: 0, width: CGFloat(metrics.tile), height: bounds.height)
         let tile = content.entries[index].tile
-        return HoverTile(spaceID: tile.spaceID, name: tile.name,
+        return HoverTile(target: tile.target, name: tile.name,
                          frame: window.convertToScreen(convert(rect, to: nil)), screen: window.screen)
     }
 
@@ -170,19 +178,20 @@ final class SpaceTilesView: NSView {
     }
 
     /// A click on the status item's button (sent on mouse up): left click on a
-    /// tile switches, on the "!" opens Setup check, between groups opens the
-    /// menu; right-click or Control-click opens the menu.
+    /// tile switches (Option: only the display under the pointer), on the "!"
+    /// opens Setup check, between groups opens the menu; right-click or
+    /// Control-click opens the menu.
     func buttonClicked(_ event: NSEvent) {
         setHovered(nil)
         pressStart = nil
         let hit = hit(event)
         if event.type == .rightMouseUp || event.modifierFlags.contains(.control) {
-            onMenu?(spaceID(at: hit), event)
+            onMenu?(target(at: hit), event)
             return
         }
         switch hit {
         case .tile:
-            if let id = spaceID(at: hit) { onClick?(id) }
+            if let target = target(at: hit) { onClick?(target, Self.thisDisplayOnly(event)) }
         case .warning:
             onWarning?()
         case .gap:
@@ -216,8 +225,8 @@ final class SpaceTilesView: NSView {
         if let tile = hoveredTile { onHover?(tile, true) }
     }
 
-    /// The Space whose tile the pointer is on, as the last mouse event said.
-    var hoveredSpaceID: UInt64? { hoveredTile?.spaceID }
+    /// The tile the pointer is on, as the last mouse event said.
+    var hoveredTarget: TileTarget? { hoveredTile?.target }
 
     /// A tile's frame on screen, measured from the pointer. On Spaces other
     /// than the first, macOS can show the menu bar item through a window other
@@ -230,7 +239,7 @@ final class SpaceTilesView: NSView {
                            width: CGFloat(metrics.tile), height: bounds.height)
         let tile = content.entries[index].tile
         let screen = NSScreen.screens.first { $0.frame.contains(pointer) } ?? window?.screen
-        return HoverTile(spaceID: tile.spaceID, name: tile.name, frame: frame, screen: screen)
+        return HoverTile(target: tile.target, name: tile.name, frame: frame, screen: screen)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -238,7 +247,7 @@ final class SpaceTilesView: NSView {
         let hit = hit(event)
         if event.modifierFlags.contains(.control) || hit == .gap {
             pressStart = nil
-            onMenu?(spaceID(at: hit), event)
+            onMenu?(target(at: hit), event)
         } else {
             pressStart = (event.timestamp, event.locationInWindow)
         }
@@ -253,7 +262,7 @@ final class SpaceTilesView: NSView {
               hypot(point.x - start.point.x, point.y - start.point.y) <= 3 else { return }
         switch hit(event) {
         case .tile:
-            if let id = spaceID(at: hit(event)) { onClick?(id) }
+            if let target = target(at: hit(event)) { onClick?(target, Self.thisDisplayOnly(event)) }
         case .warning:
             onWarning?()
         case .gap:
@@ -264,7 +273,7 @@ final class SpaceTilesView: NSView {
     override func rightMouseDown(with event: NSEvent) {
         setHovered(nil)
         pressStart = nil
-        onMenu?(spaceID(at: hit(event)), event)
+        onMenu?(target(at: hit(event)), event)
     }
 
     // MARK: Drawing
@@ -279,40 +288,46 @@ final class SpaceTilesView: NSView {
         }
     }
 
-    /// The same looks as the old floating bar: the current Space of the display
-    /// you're using is filled blue, the current Space of another display has a
-    /// blue ring, a full-screen Space has a dashed border.
+    /// Strong orange: showing (every display with a Space in the logical space
+    /// shows it, or a single Space is showing). Pale orange with an orange ring:
+    /// only some displays show it. A full-screen Space has a dashed border; a
+    /// held window over the tile gives a thick ring; a failed switch a red one.
     private func drawTile(_ entry: TilesContent.Entry, in rect: NSRect) {
         let tile = entry.tile
-        let path = NSBezierPath(roundedRect: rect.insetBy(dx: 0.75, dy: 0.75), xRadius: 3.5, yRadius: 3.5)
-        path.lineWidth = 1.2
+        var lineWidth: CGFloat = 1.2
+        var fill: NSColor?
+        var stroke: NSColor
         var numberColor: NSColor
         switch tile.state {
-        case .focused:
-            Palette.focusFill.setFill()
-            path.fill()
-            Palette.focusFill.setStroke()
-            numberColor = .white
-        case .current:
-            NSColor.quaternaryLabelColor.setFill()
-            path.fill()
-            Palette.ring.setStroke()
-            path.lineWidth = 1.6
+        case .all:
+            fill = Palette.strong
+            stroke = Palette.strong
+            numberColor = .black
+        case .some:
+            fill = Palette.pale
+            stroke = Palette.strong
+            lineWidth = 1.6
             numberColor = .labelColor
         case .normal:
-            NSColor.labelColor.withAlphaComponent(0.45).setStroke()
+            stroke = NSColor.labelColor.withAlphaComponent(0.45)
             numberColor = .labelColor
         }
         if tile.armed {
-            NSColor.systemYellow.setFill()
-            path.fill()
-            NSColor.systemYellow.setStroke()
-            numberColor = .black
+            stroke = .labelColor
+            lineWidth = 2.5
         }
         if tile.failed {
-            Palette.warning.setStroke()
-            path.lineWidth = 1.6
+            stroke = Palette.failed
+            lineWidth = 2
         }
+        let inset = lineWidth / 2 + 0.15
+        let path = NSBezierPath(roundedRect: rect.insetBy(dx: inset, dy: inset), xRadius: 3.5, yRadius: 3.5)
+        path.lineWidth = lineWidth
+        if let fill {
+            fill.setFill()
+            path.fill()
+        }
+        stroke.setStroke()
         if tile.isFullScreen { path.setLineDash([2, 1.5], count: 2, phase: 0) }
 
         NSGraphicsContext.saveGraphicsState()

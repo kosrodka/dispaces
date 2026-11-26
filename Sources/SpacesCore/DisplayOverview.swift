@@ -76,13 +76,7 @@ public struct DisplayOverview: Equatable, Sendable {
         let shared = snapshot.displays.contains(where: \.spansAllDisplays)
         var sections: [Section] = []
 
-        let order = screenOrder.map { $0.lowercased() }
-        let rank = { (display: Display) in order.firstIndex(of: display.identifier.lowercased()) ?? order.count }
-        let displays = snapshot.displays.enumerated()
-            .sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }
-            .map(\.element)
-
-        for display in displays {
+        for display in LogicalSpaces.orderedDisplays(snapshot, screenOrder: screenOrder) {
             let hidden = showsFirstSpace(display.identifier) ? nil : display.spaces.first?.managedID
             let rows = display.spaces
                 .filter { $0.managedID != hidden }

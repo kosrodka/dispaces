@@ -97,7 +97,18 @@ public struct Names: Equatable, Sendable {
     /// Sets or clears (empty string) a Space name. `liveKeys` are the keys in use
     /// right now; they are kept when old entries must be dropped to stay under the cap.
     public mutating func setName(_ name: String, for space: Space, liveKeys: Set<String>) {
-        Names.set(&spaces, key: space.nameKey, name: name, liveKeys: liveKeys)
+        setName(name, forSpaceKey: space.nameKey, liveKeys: liveKeys)
+    }
+
+    /// Sets or clears (empty string) the name stored under a Space's name key
+    /// (used to undo renames, and to rename every Space of a logical space).
+    public mutating func setName(_ name: String, forSpaceKey key: String, liveKeys: Set<String>) {
+        Names.set(&spaces, key: key, name: name, liveKeys: liveKeys)
+    }
+
+    /// The user's name stored under a Space's name key, if any.
+    public func storedName(forSpaceKey key: String) -> String? {
+        spaces[key]
     }
 
     public mutating func setName(_ name: String, for display: Display, liveKeys: Set<String>) {

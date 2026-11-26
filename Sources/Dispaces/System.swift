@@ -62,6 +62,15 @@ enum Screens {
         return NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) }.flatMap(identifier(of:))
     }
 
+    /// True for the Mac's built-in display, nil when no connected screen has this identifier.
+    static func isBuiltIn(_ displayIdentifier: String) -> Bool? {
+        guard let screen = NSScreen.screens.first(where: {
+                  Self.identifier(of: $0)?.caseInsensitiveCompare(displayIdentifier) == .orderedSame
+              }),
+              let id = displayID(of: screen) else { return nil }
+        return CGDisplayIsBuiltin(id) != 0
+    }
+
     static func matches(_ identifier: String?, _ display: Display) -> Bool {
         if display.spansAllDisplays { return true }
         guard let identifier else { return false }
