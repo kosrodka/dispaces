@@ -61,6 +61,44 @@ public enum SwitchPlanner {
         return stepPlan
     }
 
+    /// The order to switch a logical space's displays in: the displays that
+    /// aren't showing their Space yet, in the given (display) order, with the
+    /// display under the pointer (where the user clicked) last, so it keeps the
+    /// focus. A Space counts on the display it's on now (`onDisplay`).
+    public static func order(_ cells: [LogicalSpaces.Cell], pointerDisplay: String?) -> [LogicalSpaces.Cell] {
+        let pending = cells.filter { !$0.isCurrent }
+        guard let pointer = pointerDisplay else { return pending }
+        let onPointer = { (cell: LogicalSpaces.Cell) in cell.onDisplay.caseInsensitiveCompare(pointer) == .orderedSame }
+        return pending.filter { !onPointer($0) } + pending.filter(onPointer)
+    }
+
+    /// The Space that should have the focus after switching a logical space: the
+    /// clicked display's Space in it or, when that display has none, the Space it
+    /// shows now, so the focus stays on the display the user clicked on.
+    public static func focusTarget(_ column: LogicalSpaces.Column, pointerDisplay: Display?) -> UInt64? {
+        guard let display = pointerDisplay else { return nil }
+        return column.switchCell(on: display.identifier)?.space.managedID ?? display.currentSpaceID
+    }
+
+    /// After switching several displays, the focus may have moved to another
+    /// display. Returns the press that brings it back to `spaceID`'s display:
+    /// only when that Space is showing, doesn't have the focus, and is a desktop
+    /// whose "Switch to Desktop N" shortcut is on. Otherwise nil (nothing to press).
+    public static func refocusPlan(on spaceID: UInt64, in snapshot: Snapshot, hotkeys: HotkeyTable) -> SwitchPlan? {
+        guard let active = snapshot.activeSpaceID, active != spaceID,
+              let found = snapshot.locate(spaceID: spaceID), found.display.currentSpaceID == spaceID,
+              found.space.kind == .desktop, let number = found.space.desktopNumber,
+              let id = HotkeyID.switchToDesktop(number) else { return nil }
+        let setting = hotkeys.setting(for: id)
+        guard let combo = setting.combo, setting.enabled != false else { return nil }
+        return .pressHotkey(id: id, combo: combo, desktop: number)
+    }
+
+    /// Option-click on a logical space the clicked display has no Space in.
+    public static func noSpaceMessage(display: String, title: String) -> String {
+        "\(display) has no Space named \u{201C}\(title)\u{201D}."
+    }
+
     static func planSteps(to space: Space, on display: Display, hotkeys: HotkeyTable,
                           pointerDisplay: String?) -> SwitchPlan {
         guard display.spansAllDisplays || pointerDisplay == display.identifier else {

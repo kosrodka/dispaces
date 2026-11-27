@@ -9,61 +9,36 @@ final class Preferences {
     private enum Key {
         static let spaceNames = "spaceNames"
         static let displayNames = "displayNames"
-        static let barOffsets = "barOffsets"
-        static let barSizes = "barSizes"
-        static let collapsedBars = "collapsedBars"
-        static let lockedBars = "lockedBars"
-        static let barHidden = "barHidden"
+        /// Logical space key → what its tile shows instead of the number.
+        static let tileLabels = "tileLabels"
+        static let fallbackBar = "fallbackBar"
         static let showAppsOnHover = "showAppsOnHover"
         static let dragWindows = "dragWindows"
         static let displayMemory = "displayMemory"
-        static let firstSpaces = "firstSpaces"
+        static let firstSpaceBuiltIn = "firstSpaceBuiltIn"
+        static let firstSpaceExternal = "firstSpaceExternal"
     }
 
     private(set) var names: Names
 
     init() {
         names = Names(storedSpaces: defaults.object(forKey: Key.spaceNames),
-                      storedDisplays: defaults.object(forKey: Key.displayNames))
-        layout = BarLayout(storedOffsets: defaults.object(forKey: Key.barOffsets),
-                           storedSizes: defaults.object(forKey: Key.barSizes),
-                           storedCollapsed: defaults.object(forKey: Key.collapsedBars),
-                           storedLocked: defaults.object(forKey: Key.lockedBars))
+                      storedDisplays: defaults.object(forKey: Key.displayNames),
+                      storedLabels: defaults.object(forKey: Key.tileLabels))
         memory = DisplayMemory(stored: defaults.object(forKey: Key.displayMemory))
-        firstSpaces = FirstSpaces(stored: defaults.object(forKey: Key.firstSpaces))
         // v0.1 kept one position for a single bar; it no longer applies.
+        // (The floating bars' later positions, sizes and locks, and the old
+        // per-display "firstSpaces" choices, are left as they were, unused, so
+        // going back to an older build keeps them.)
         defaults.removeObject(forKey: "barLeft")
         defaults.removeObject(forKey: "barTop")
-        // Until per-bar locks, one lock applied to every bar. Carried over once
-        // the bars are known (see `takeLegacyLock`).
-        legacyLock = defaults.object(forKey: "locked") as? Bool ?? false
-    }
-
-    private var legacyLock = false
-
-    /// True once if the old single "locked" setting was on; then forgets it.
-    func takeLegacyLock() -> Bool {
-        guard legacyLock else { return false }
-        legacyLock = false
-        defaults.removeObject(forKey: "locked")
-        return true
     }
 
     func updateNames(_ change: (inout Names) -> Void) {
         change(&names)
         defaults.set(names.spaces, forKey: Key.spaceNames)
         defaults.set(names.displays, forKey: Key.displayNames)
-    }
-
-    /// Per-display bar positions, sizes, and collapsed and locked state.
-    private(set) var layout: BarLayout
-
-    func updateLayout(_ change: (inout BarLayout) -> Void) {
-        change(&layout)
-        defaults.set(layout.storedOffsets, forKey: Key.barOffsets)
-        defaults.set(layout.storedSizes, forKey: Key.barSizes)
-        defaults.set(layout.storedCollapsed, forKey: Key.collapsedBars)
-        defaults.set(layout.storedLocked, forKey: Key.lockedBars)
+        defaults.set(names.labels, forKey: Key.tileLabels)
     }
 
     /// Which Spaces belong to which display, including unplugged displays.
@@ -73,17 +48,18 @@ final class Preferences {
         if change(&memory) { defaults.set(memory.stored, forKey: Key.displayMemory) }
     }
 
-    /// Whether each display's first Space is shown (shown by default).
-    private(set) var firstSpaces: FirstSpaces
-
-    func updateFirstSpaces(_ change: (inout FirstSpaces) -> Void) {
-        change(&firstSpaces)
-        defaults.set(firstSpaces.stored, forKey: Key.firstSpaces)
+    /// Whether first Spaces are shown: built-in display yes, external displays
+    /// no, unless changed with `defaults write` (nothing in the app writes these).
+    /// Read each time, so a change applies on the next refresh.
+    var firstSpaceRule: FirstSpaceRule {
+        FirstSpaceRule(storedBuiltIn: defaults.object(forKey: Key.firstSpaceBuiltIn),
+                       storedExternal: defaults.object(forKey: Key.firstSpaceExternal))
     }
 
-    var barHidden: Bool {
-        get { defaults.object(forKey: Key.barHidden) as? Bool ?? false }
-        set { defaults.set(newValue, forKey: Key.barHidden) }
+    /// "Floating bar when the menu bar item is hidden"; on unless the user turns it off.
+    var fallbackBar: Bool {
+        get { defaults.object(forKey: Key.fallbackBar) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Key.fallbackBar) }
     }
 
     /// "Show apps on hover"; on unless the user turns it off.
@@ -92,7 +68,8 @@ final class Preferences {
         set { defaults.set(newValue, forKey: Key.showAppsOnHover) }
     }
 
-    /// "Option-drag windows to Spaces"; off until the user turns it on.
+    /// "Option-Control-drag windows to Spaces"; off until the user turns it on.
+    /// (The key keeps its old name so the choice survives.)
     var dragWindows: Bool {
         get { defaults.object(forKey: Key.dragWindows) as? Bool ?? false }
         set { defaults.set(newValue, forKey: Key.dragWindows) }
@@ -192,7 +169,47 @@ final class SpaceSwitcher {
             busy = false
             monitor.refresh()
         }
+        return await perform(spaceID)
+    }
 
+    /// Switches several displays (a logical space) one after another, each
+    /// confirmed before the next; a failure on one display doesn't stop the
+    /// others. Then, if `focusOn` is showing but doesn't have the focus (pressing
+    /// another display's shortcut can move it), presses its own shortcut once
+    /// more, so the focus stays on the display the user clicked on.
+    /// Returns nil, pressing nothing, while another switch is running.
+    func switchAll(_ spaceIDs: [UInt64], focusOn: UInt64?) async -> [(spaceID: UInt64, outcome: Outcome)]? {
+        guard !busy else { return nil }
+        busy = true
+        defer {
+            busy = false
+            monitor.refresh()
+        }
+        var results: [(spaceID: UInt64, outcome: Outcome)] = []
+        for spaceID in spaceIDs {
+            let outcome = await perform(spaceID)
+            results.append((spaceID, outcome))
+            // Without Accessibility nothing can be pressed; say so once.
+            if outcome == .failed(SwitchPlanner.permissionMessage) { return results }
+        }
+        if let focusOn { await refocus(on: focusOn) }
+        return results
+    }
+
+    /// Presses `spaceID`'s own shortcut if it's showing without the focus. Quiet:
+    /// if it doesn't take, the switch itself still worked.
+    private func refocus(on spaceID: UInt64) async {
+        guard KeyPoster.hasPermission,
+              case let .pressHotkey(id, combo, _)? = SwitchPlanner.refocusPlan(on: spaceID, in: monitor.peek(),
+                                                                                hotkeys: HotkeyReader.read()),
+              await KeyPoster.press(combo, hotkeyID: id) else { return }
+        if !(await waitUntil { $0.activeSpaceID == spaceID }) {
+            log.notice("Focus did not come back to the clicked display")
+        }
+    }
+
+    /// Plans, presses and confirms one switch.
+    private func perform(_ spaceID: UInt64) async -> Outcome {
         let snapshot = monitor.peek()
         let plan = SwitchPlanner.plan(to: spaceID, in: snapshot, hotkeys: HotkeyReader.read(),
                                       pointerDisplay: Screens.pointerIdentifier())

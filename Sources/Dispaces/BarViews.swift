@@ -3,66 +3,50 @@ import SpacesCore
 
 /// What one tile shows.
 struct TileModel: Equatable {
+    /// Seen from the display you're working on (the one with the focus).
     enum State: Equatable {
-        /// Current Space on the display you are using.
-        case focused
-        /// Current Space on another display.
-        case current
+        /// That display shows it. Strong orange.
+        case strong
+        /// Only other displays show it, so the displays differ. Pale orange.
+        case pale
         case normal
+
+        init(_ highlight: LogicalSpaces.Highlight) {
+            switch highlight {
+            case .here: self = .strong
+            case .elsewhere: self = .pale
+            case .none: self = .normal
+            }
+        }
     }
 
-    let spaceID: UInt64
+    let target: TileTarget
     let number: String
     let name: String
     let state: State
     let isFullScreen: Bool
     let failed: Bool
-    /// A window is being Option-dragged onto this tile (shown in yellow).
+    /// A window is being Option-Control-dragged onto this tile (thick ring).
     var armed = false
     let accessibilityLabel: String
 }
 
-struct GroupModel: Equatable {
-    /// Spaces of a disconnected display that macOS moved onto this one,
-    /// shown after this display's own Spaces under the old display's name.
-    struct Ghost: Equatable {
-        let label: String
-        let tiles: [TileModel]
-    }
-
-    let displayKey: String
-    let label: String
-    let tiles: [TileModel]
-    var ghosts: [Ghost] = []
-}
-
-/// What one display's bar shows.
-struct BarModel: Equatable {
-    /// nil when the Space list couldn't be read.
-    let group: GroupModel?
-    let warning: Bool
-    let collapsed: Bool
-    let locked: Bool
-    /// Size the user picked by dragging the bar's edges; nil = natural size.
-    var size: CGSize?
-    /// A window is being Option-dragged over this bar.
-    var glowing = false
-}
-
 enum Palette {
-    static let focusFill = NSColor(srgbRed: 0, green: 0x63 / 255.0, blue: 0xCE / 255.0, alpha: 1)
+    /// Fill of a tile the display you're working on shows (`TileModel.State.strong`), and the ring of a pale one.
+    static let strong = NSColor.systemOrange
+    /// Fill of a tile only other displays show (`TileModel.State.pale`).
+    static let pale = NSColor.systemOrange.withAlphaComponent(0.35)
+    /// Ring of a tile whose switch failed.
+    static let failed = NSColor.systemRed
+    /// The setup "!" and message borders.
     static let warning = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             ? NSColor(srgbRed: 1, green: 0xB3 / 255.0, blue: 0x40 / 255.0, alpha: 1)
             : NSColor(srgbRed: 0xA0 / 255.0, green: 0x5A / 255.0, blue: 0, alpha: 1)
     }
-    static let ring = NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 0x4D / 255.0, green: 0xA3 / 255.0, blue: 1, alpha: 1)
-            : focusFill
-    }
 }
 
+/// Sizes of the Manage window's bars.
 enum Metrics {
     static let barHeight: CGFloat = 36
     static let inset: CGFloat = 5
@@ -71,12 +55,6 @@ enum Metrics {
     static let groupPadding: CGFloat = 6
     static let normalTile: ClosedRange<CGFloat> = 64...150
     static let compactTile: ClosedRange<CGFloat> = 40...90
-    /// Narrowest a tile gets when the user makes the bar narrow (at scale 1).
-    static let minTile: CGFloat = 26
-    static let controlSize: CGFloat = 20
-    static let controlGap: CGFloat = 1
-    /// How close to the bar's edge the pointer must be to resize it.
-    static let resizeZone: CGFloat = 5
 
     // Fonts grow with the bar's height; `scale` is 1 at the default height.
     static func tileFont(_ scale: CGFloat, bold: Bool) -> NSFont {
@@ -85,12 +63,16 @@ enum Metrics {
     static func numberFont(_ scale: CGFloat) -> NSFont {
         NSFont.monospacedDigitSystemFont(ofSize: 10 * scale, weight: .regular)
     }
+    /// Display names, a size above the Space names so the rows read at a glance.
     static func labelFont(_ scale: CGFloat) -> NSFont {
-        NSFont.systemFont(ofSize: 10 * scale, weight: .semibold)
+        NSFont.systemFont(ofSize: 12 * scale, weight: .semibold)
     }
+    /// Column headings (logical spaces) are drawn this much larger than the
+    /// Spaces under them (13 pt names instead of 11 pt); the Spaces keep their size.
+    static let headerScale: CGFloat = 13.0 / 11.0
 }
 
-/// Base of the app's floating panels (bars, apps column, messages): borderless,
+/// Base of the app's floating panels (apps column, messages): borderless,
 /// non-activating, above normal windows and on every Space. Never key or main,
 /// so it never takes focus or your typing.
 @MainActor
@@ -111,6 +93,48 @@ class FloatingPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+/// The rounded box of a floating panel (apps column, message, floating bar).
+///
+/// Its colours are set in `updateLayer()`, which AppKit runs with the box's
+/// own light or dark appearance, and again whenever that changes. A colour set
+/// once when the panel opens keeps the look macOS had then: after macOS
+/// switched to Dark, the background stayed white behind the now white text.
+@MainActor
+class PanelBoxView: NSView {
+    var fill: NSColor = .windowBackgroundColor {
+        didSet { needsDisplay = true }
+    }
+    /// Applied when drawing: `withAlphaComponent` would fix the colour's look.
+    var fillAlpha: CGFloat = 1 {
+        didSet { needsDisplay = true }
+    }
+    var border: NSColor = .separatorColor {
+        didSet { needsDisplay = true }
+    }
+
+    init(cornerRadius: CGFloat) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = cornerRadius
+        layer?.borderWidth = 1
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        layer?.backgroundColor = fill.cgColor.copy(alpha: fillAlpha) ?? fill.cgColor
+        layer?.borderColor = border.cgColor
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+}
+
 extension NSView {
     /// Replaces the view's tracking areas with one that follows its visible rect.
     /// Always active: the app is never the active app.
@@ -121,16 +145,7 @@ extension NSView {
     }
 }
 
-extension BarGeometry.Rect {
-    init(_ rect: NSRect) {
-        self.init(x: Double(rect.origin.x), y: Double(rect.origin.y),
-                  width: Double(rect.size.width), height: Double(rect.size.height))
-    }
-
-    var nsRect: NSRect { NSRect(x: x, y: y, width: width, height: height) }
-}
-
-/// A clickable, rounded tile. Draws itself; no subviews.
+/// A clickable, rounded tile in the Manage window. Draws itself; no subviews.
 @MainActor
 final class TileView: NSView {
     let model: TileModel
@@ -138,6 +153,8 @@ final class TileView: NSView {
     let scale: CGFloat
     var onClick: (() -> Void)?
     var onRename: (() -> Void)?
+    /// The rename item in the tile's right-click menu.
+    var renameTitle = "Rename Space…"
     /// Pointer entered (true) or left (false) the tile.
     var onHover: ((Bool) -> Void)?
     /// A click switches only when the button is let go within this many
@@ -176,6 +193,11 @@ final class TileView: NSView {
         window.map { $0.convertToScreen(convert(bounds, to: nil)) }
     }
 
+    /// This tile, for the apps column.
+    var hoverTile: HoverTile? {
+        screenFrame.map { HoverTile(target: model.target, name: model.name, frame: $0, screen: window?.screen) }
+    }
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         resetTrackingArea([.mouseEnteredAndExited, .assumeInside])
@@ -187,10 +209,11 @@ final class TileView: NSView {
     static func width(for model: TileModel, compact: Bool, scale: CGFloat) -> CGFloat {
         let font = Metrics.tileFont(scale, bold: model.state != .normal)
         let text = (model.name as NSString).size(withAttributes: [.font: font]).width
-        let number = (model.number as NSString).size(withAttributes: [.font: Metrics.numberFont(scale)]).width
+        let number = model.number.isEmpty ? 0
+            : (model.number as NSString).size(withAttributes: [.font: Metrics.numberFont(scale)]).width + 6
         let range = compact ? Metrics.compactTile : Metrics.normalTile
         let padding: CGFloat = compact ? 12 : 18
-        return min(max(ceil(text + number + 6 + padding), range.lowerBound * scale), range.upperBound * scale)
+        return min(max(ceil(text + number + padding), range.lowerBound * scale), range.upperBound * scale)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -225,7 +248,7 @@ final class TileView: NSView {
 
     private func showMenu(_ event: NSEvent) {
         let menu = NSMenu()
-        let item = NSMenuItem(title: "Rename Space…", action: #selector(renameFromMenu), keyEquivalent: "")
+        let item = NSMenuItem(title: renameTitle, action: #selector(renameFromMenu), keyEquivalent: "")
         item.target = self
         menu.addItem(item)
         NSMenu.popUpContextMenu(menu, with: event, for: self)
@@ -241,16 +264,16 @@ final class TileView: NSView {
         var textColor: NSColor
         var numberColor: NSColor
         switch model.state {
-        case .focused:
-            Palette.focusFill.setFill()
+        case .strong:
+            Palette.strong.setFill()
             path.fill()
-            Palette.focusFill.setStroke()
-            textColor = .white
-            numberColor = NSColor.white.withAlphaComponent(0.85)
-        case .current:
-            NSColor.quaternaryLabelColor.setFill()
+            Palette.strong.setStroke()
+            textColor = .black
+            numberColor = NSColor.black.withAlphaComponent(0.7)
+        case .pale:
+            Palette.pale.setFill()
             path.fill()
-            Palette.ring.setStroke()
+            Palette.strong.setStroke()
             textColor = .labelColor
             numberColor = .secondaryLabelColor
         case .normal:
@@ -259,34 +282,83 @@ final class TileView: NSView {
             numberColor = .secondaryLabelColor
         }
         if model.armed {
-            NSColor.systemYellow.setFill()
-            path.fill()
-            NSColor.systemYellow.setStroke()
-            textColor = .black
-            numberColor = NSColor.black.withAlphaComponent(0.7)
+            NSColor.labelColor.setStroke()
+            path.lineWidth = 2.5
         }
-        if model.failed { Palette.warning.setStroke() }
+        if model.failed {
+            Palette.failed.setStroke()
+            path.lineWidth = 2
+        }
         if model.isFullScreen { path.setLineDash([3, 2], count: 2, phase: 0) }
         path.stroke()
 
         let padding: CGFloat = compact ? 6 : 9
-        let numberAttrs: [NSAttributedString.Key: Any] = [.font: Metrics.numberFont(scale), .foregroundColor: numberColor]
-        let numberSize = (model.number as NSString).size(withAttributes: numberAttrs)
-        let numberOrigin = NSPoint(x: padding, y: (bounds.height - numberSize.height) / 2)
-        (model.number as NSString).draw(at: numberOrigin, withAttributes: numberAttrs)
-
         let style = NSMutableParagraphStyle()
         style.lineBreakMode = .byTruncatingTail
+        var x = padding
+        if model.number.isEmpty {
+            // A name alone (a column heading in the Manage window) is centred.
+            style.alignment = .center
+        } else {
+            let numberAttrs: [NSAttributedString.Key: Any] = [.font: Metrics.numberFont(scale), .foregroundColor: numberColor]
+            let numberSize = (model.number as NSString).size(withAttributes: numberAttrs)
+            let numberOrigin = NSPoint(x: padding, y: (bounds.height - numberSize.height) / 2)
+            (model.number as NSString).draw(at: numberOrigin, withAttributes: numberAttrs)
+            x = numberOrigin.x + numberSize.width + 6
+        }
+
         let font = Metrics.tileFont(scale, bold: model.state != .normal)
         let nameAttrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: textColor, .paragraphStyle: style]
         let nameHeight = (model.name as NSString).size(withAttributes: nameAttrs).height
-        let x = numberOrigin.x + numberSize.width + 6
         let nameRect = NSRect(x: x, y: (bounds.height - nameHeight) / 2, width: max(0, bounds.width - x - padding + 2), height: nameHeight)
         (model.name as NSString).draw(with: nameRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: nameAttrs)
     }
 }
 
-/// A display's name at the start of its area.
+/// An empty cell in the Manage window grid: this display has no Space with
+/// the column's name. Lights up while a Space from its row may be dropped on it.
+@MainActor
+final class NotAssignedView: NSView {
+    let text: String
+    var highlighted = false {
+        didSet { if highlighted != oldValue { needsDisplay = true } }
+    }
+
+    init(text: String) {
+        self.text = text
+        super.init(frame: .zero)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+        setAccessibilityLabel(text)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 6, yRadius: 6)
+        if highlighted {
+            NSColor.controlAccentColor.withAlphaComponent(0.2).setFill()
+            path.fill()
+            NSColor.controlAccentColor.setStroke()
+            path.lineWidth = 2
+        } else {
+            NSColor.separatorColor.setStroke()
+            path.lineWidth = 1
+            path.setLineDash([3, 2], count: 2, phase: 0)
+        }
+        path.stroke()
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byTruncatingTail
+        let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 10),
+                                                    .foregroundColor: NSColor.tertiaryLabelColor, .paragraphStyle: style]
+        let height = (text as NSString).size(withAttributes: attrs).height
+        let rect = NSRect(x: 8, y: (bounds.height - height) / 2, width: max(0, bounds.width - 16), height: height)
+        (text as NSString).draw(with: rect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: attrs)
+    }
+}
+
+/// A display's name at the start of its area (Manage window).
 @MainActor
 final class DisplayLabelView: NSView {
     let text: String
@@ -322,7 +394,7 @@ final class DisplayLabelView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     var preferredWidth: CGFloat {
-        min(ceil((text as NSString).size(withAttributes: attributes).width) + 12, 160 * scale)
+        min(ceil((text as NSString).size(withAttributes: attributes).width) + 12, 220 * scale)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -363,232 +435,6 @@ final class DisplayLabelView: NSView {
     }
 }
 
-/// A tiny icon button in the bar's control section (show/hide Spaces, lock, refresh).
-@MainActor
-final class ControlButton: NSView {
-    var onClick: (() -> Void)?
-    private let imageView = NSImageView()
-
-    init(symbol: String, label: String) {
-        super.init(frame: .zero)
-        toolTip = label
-        let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
-        imageView.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)?.withSymbolConfiguration(config)
-        imageView.contentTintColor = .secondaryLabelColor
-        imageView.imageScaling = .scaleNone
-        addSubview(imageView)
-        wantsLayer = true
-        layer?.cornerRadius = 5
-        setAccessibilityElement(true)
-        setAccessibilityRole(.button)
-        setAccessibilityLabel(label)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("not used") }
-
-    override func layout() {
-        super.layout()
-        imageView.frame = bounds
-    }
-
-    /// Clicks land on the button, not on the image inside it.
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        frame.contains(point) ? self : nil
-    }
-
-    override var mouseDownCanMoveWindow: Bool { false }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
-    override func mouseDown(with event: NSEvent) {
-        layer?.backgroundColor = NSColor.quaternaryLabelColor.cgColor
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        layer?.backgroundColor = nil
-        if bounds.contains(convert(event.locationInWindow, from: nil)) { onClick?() }
-    }
-
-    override func accessibilityPerformPress() -> Bool {
-        onClick?()
-        return true
-    }
-}
-
-/// The amber "!" shown when setup needs attention.
-@MainActor
-final class WarningView: NSView {
-    var onClick: (() -> Void)?
-
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        toolTip = "Setup needs attention"
-        setAccessibilityElement(true)
-        setAccessibilityRole(.button)
-        setAccessibilityLabel("Setup needs attention")
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("not used") }
-
-    override var mouseDownCanMoveWindow: Bool { false }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func mouseDown(with event: NSEvent) { onClick?() }
-    override func accessibilityPerformPress() -> Bool {
-        onClick?()
-        return true
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.75, dy: 0.75), xRadius: 6, yRadius: 6)
-        path.lineWidth = 1.5
-        Palette.warning.setStroke()
-        path.stroke()
-        let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 13, weight: .bold), .foregroundColor: Palette.warning]
-        let size = ("!" as NSString).size(withAttributes: attrs)
-        ("!" as NSString).draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2), withAttributes: attrs)
-    }
-}
-
-/// The bar's background. Dragging on it moves the bar; near its edges the
-/// pointer turns into a resize cursor and dragging resizes it.
-@MainActor
-final class BarBackgroundView: NSView {
-    var onDrag: ((NSEvent) -> Void)?
-    var onResize: ((NSEvent, ResizeEdges) -> Void)?
-    /// Double-click on an edge: back to the natural size.
-    var onResetSize: (() -> Void)?
-    var canResize = false {
-        didSet { if !canResize { hoveredEdges = [] } }
-    }
-    /// A window is being Option-dragged over the bar.
-    var glowing = false {
-        didSet { if glowing != oldValue { needsDisplay = true } }
-    }
-
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        wantsLayer = true
-        layer?.cornerRadius = 11
-        layer?.borderWidth = 1
-        setAccessibilityElement(true)
-        setAccessibilityRole(.group)
-        setAccessibilityLabel("Dispaces")
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("not used") }
-
-    override var mouseDownCanMoveWindow: Bool { false }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
-    override func mouseDown(with event: NSEvent) {
-        let edges = edges(at: convert(event.locationInWindow, from: nil))
-        if edges.isEmpty {
-            onDrag?(event)
-        } else if event.clickCount == 2 {
-            onResetSize?()
-        } else {
-            onResize?(event, edges)
-        }
-    }
-
-    /// Edges within reach of `point`; empty when resizing isn't allowed.
-    func edges(at point: NSPoint) -> ResizeEdges {
-        guard canResize else { return [] }
-        return BarGeometry.edges(x: Double(point.x), y: Double(point.y), width: Double(bounds.width),
-                                 height: Double(bounds.height), zone: Double(Metrics.resizeZone))
-    }
-
-    // The cursor. Dispaces is never the active app (so it can't steal your
-    // typing), and macOS lets the active app reset the cursor whenever it likes.
-    // So while the pointer is on an edge the resize cursor is set again on every
-    // mouse event and a few times a second, and the border is highlighted as a
-    // cue that doesn't depend on the cursor.
-
-    /// Edges under the pointer right now.
-    private(set) var hoveredEdges: ResizeEdges = [] {
-        didSet {
-            guard hoveredEdges != oldValue else { return }
-            needsDisplay = true
-            if hoveredEdges.isEmpty {
-                cursorTimer?.invalidate()
-                cursorTimer = nil
-                NSCursor.arrow.set()
-            } else if cursorTimer == nil {
-                let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] timer in
-                    MainActor.assumeIsolated {
-                        guard let self else { return timer.invalidate() }
-                        self.reassertCursor()
-                    }
-                }
-                RunLoop.main.add(timer, forMode: .common)
-                cursorTimer = timer
-            }
-        }
-    }
-    private var cursorTimer: Timer?
-    /// Edges being dragged right now; the pointer may leave the bar meanwhile.
-    var activeResize: ResizeEdges = []
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        resetTrackingArea([.mouseMoved, .mouseEnteredAndExited, .cursorUpdate])
-    }
-
-    override func mouseEntered(with event: NSEvent) { hover(event) }
-    override func mouseMoved(with event: NSEvent) { hover(event) }
-    override func cursorUpdate(with event: NSEvent) { hover(event) }
-    override func mouseExited(with event: NSEvent) { hoveredEdges = [] }
-
-    private func hover(_ event: NSEvent) {
-        hoveredEdges = edges(at: convert(event.locationInWindow, from: nil))
-        if !hoveredEdges.isEmpty { Self.cursor(for: hoveredEdges).set() }
-    }
-
-    /// Re-checks where the pointer is (an exit can be missed) and sets the cursor again.
-    private func reassertCursor() {
-        if !activeResize.isEmpty {
-            Self.cursor(for: activeResize).set()
-            return
-        }
-        guard let window else {
-            hoveredEdges = []
-            return
-        }
-        hoveredEdges = edges(at: convert(window.mouseLocationOutsideOfEventStream, from: nil))
-        if !hoveredEdges.isEmpty { Self.cursor(for: hoveredEdges).set() }
-    }
-
-    static func cursor(for edges: ResizeEdges) -> NSCursor {
-        let position: NSCursor.FrameResizePosition
-        switch (edges.contains(.left), edges.contains(.right), edges.contains(.top), edges.contains(.bottom)) {
-        case (true, _, true, _): position = .topLeft
-        case (true, _, _, true): position = .bottomLeft
-        case (_, true, true, _): position = .topRight
-        case (_, true, _, true): position = .bottomRight
-        case (true, _, _, _): position = .left
-        case (_, true, _, _): position = .right
-        case (_, _, true, _): position = .top
-        case (_, _, _, true): position = .bottom
-        default: return .arrow
-        }
-        return .frameResize(position: position, directions: .all)
-    }
-
-    override func updateLayer() {
-        let base = NSColor.windowBackgroundColor
-        let fill = glowing ? (base.blended(withFraction: 0.25, of: .systemYellow) ?? base) : base
-        layer?.backgroundColor = fill.withAlphaComponent(0.96).cgColor
-        let highlighted = glowing || !hoveredEdges.isEmpty
-        let border = glowing ? NSColor.systemYellow : NSColor.controlAccentColor
-        layer?.borderColor = (highlighted ? border : NSColor.separatorColor).cgColor
-        layer?.borderWidth = highlighted ? 2 : 1
-    }
-
-    override var wantsUpdateLayer: Bool { true }
-}
-
 /// A thin vertical line between display areas.
 @MainActor
 final class DividerView: NSView {
@@ -603,12 +449,15 @@ final class DividerView: NSView {
 /// Never takes keyboard focus.
 @MainActor
 final class AppsPanel: FloatingPanel {
-    /// Rows shown before "+N more".
-    static let maxRows = 12
     private let stack = NSStackView()
-    private let box = AppsBoxView()
-    /// An app row was clicked.
-    var onPick: ((NSRunningApplication) -> Void)?
+    /// Holds the stack, top first; scrolls when the column is taller than the screen allows.
+    private let scroll = NSScrollView()
+    private let document = FlippedStackHolder()
+    private let box = AppsBoxView(cornerRadius: 8)
+    /// An app row was clicked, in this section.
+    var onPick: ((NSRunningApplication, Section) -> Void)?
+    /// A display tile was clicked: go to this Space.
+    var onChoose: ((UInt64) -> Void)?
     /// The pointer left the column.
     var onExit: (() -> Void)? {
         get { box.onExit }
@@ -619,52 +468,106 @@ final class AppsPanel: FloatingPanel {
         super.init(size: NSSize(width: 160, height: 40))
         animationBehavior = .none
 
-        box.wantsLayer = true
-        box.layer?.cornerRadius = 8
-        box.layer?.borderWidth = 1
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 4
         stack.edgeInsets = NSEdgeInsets(top: 8, left: 8, bottom: 8, right: 10)
         stack.translatesAutoresizingMaskIntoConstraints = true
-        box.addSubview(stack)
+        document.addSubview(stack)
+        scroll.documentView = document
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        box.addSubview(scroll)
         contentView = box
     }
 
-    /// Shows `apps` in a column under (or, near the bottom of the screen, over) `tile`.
-    func show(title: String, apps: [NSRunningApplication], tile: NSRect, screen: NSScreen?) {
+    /// One display's apps in the column; the heading names the display when a
+    /// logical space spans several.
+    struct Section {
+        let heading: String?
+        let apps: [NSRunningApplication]
+        /// An unplugged display's section: its heading is faded.
+        var faded = false
+        /// Picking an app in it goes to this Space (an unplugged display's,
+        /// where macOS moved it) instead of the tile's.
+        var spaceID: UInt64?
+    }
+
+    /// A display's Space of the hovered logical space, offered as a tile under
+    /// the title when one of them belongs to an unplugged display.
+    struct Choice {
+        let name: String
+        /// An unplugged display's: its name is faded.
+        let faded: Bool
+        /// Shown on screen now: strong orange.
+        let isCurrent: Bool
+        let spaceID: UInt64
+    }
+
+    /// Shows the apps in a column under (or, near the bottom of the screen, over)
+    /// `tile`: the title, then the display tiles (if any), one per line, then
+    /// every app. Scrolls when taller than the room on screen.
+    func show(title: String, choices: [Choice] = [], sections: [Section], tile: NSRect, screen: NSScreen?) {
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         let heading = NSTextField(labelWithString: title)
         heading.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
         heading.textColor = .secondaryLabelColor
         heading.lineBreakMode = .byTruncatingTail
         stack.addArrangedSubview(heading)
-        if apps.isEmpty {
-            stack.addArrangedSubview(Self.label("No windows", color: .tertiaryLabelColor))
+        for choice in choices {
+            let view = DisplayChoiceView(choice)
+            view.onClick = { [weak self] in self?.onChoose?(choice.spaceID) }
+            addFullWidth(view)
         }
-        for app in apps.prefix(Self.maxRows) {
-            let row = AppRowView(app: app)
-            row.onClick = { [weak self] in self?.onPick?(app) }
-            stack.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalTo: stack.widthAnchor,
-                                       constant: -(stack.edgeInsets.left + stack.edgeInsets.right)).isActive = true
-        }
-        if apps.count > Self.maxRows {
-            stack.addArrangedSubview(Self.label("+\(apps.count - Self.maxRows) more", color: .secondaryLabelColor))
+        if !choices.isEmpty, let last = stack.arrangedSubviews.last { stack.setCustomSpacing(8, after: last) }
+        for section in sections {
+            if let name = section.heading {
+                let label = NSTextField(labelWithString: name.uppercased())
+                label.font = NSFont.systemFont(ofSize: 9, weight: .semibold)
+                // An unplugged display's name is faded; that's the only difference.
+                label.textColor = section.faded ? .tertiaryLabelColor : .secondaryLabelColor
+                label.lineBreakMode = .byTruncatingTail
+                stack.addArrangedSubview(label)
+            }
+            if section.apps.isEmpty {
+                stack.addArrangedSubview(Self.label("No windows", color: .tertiaryLabelColor))
+            }
+            for app in section.apps {
+                let row = AppRowView(app: app)
+                row.onClick = { [weak self] in self?.onPick?(app, section) }
+                addFullWidth(row)
+            }
         }
 
-        box.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
-        box.layer?.borderColor = NSColor.separatorColor.cgColor
         let fitting = stack.fittingSize
-        let size = NSSize(width: min(max(fitting.width, 120), 260), height: fitting.height)
-        stack.frame = NSRect(origin: .zero, size: size)
+        let width = min(max(fitting.width, 120), 260)
+        stack.frame = NSRect(x: 0, y: 0, width: width, height: fitting.height)
         stack.layoutSubtreeIfNeeded()
+        document.frame = stack.frame
         let visible = screen?.visibleFrame ?? tile.insetBy(dx: -1000, dy: -1000)
-        var origin = NSPoint(x: tile.minX, y: tile.minY - size.height - 4)
-        if origin.y < visible.minY { origin.y = tile.maxY + 4 }
-        origin.x = min(max(origin.x, visible.minX), visible.maxX - size.width)
-        setFrame(NSRect(origin: origin, size: size), display: true)
+        let place = MenuBarGeometry.appsColumn(height: Double(fitting.height), tileBottom: Double(tile.minY),
+                                               tileTop: Double(tile.maxY), visibleBottom: Double(visible.minY),
+                                               visibleTop: Double(visible.maxY), gap: 4)
+        // A scroll bar that takes room ("Always" in System Settings) mustn't cover the rows.
+        var panelWidth = width
+        if CGFloat(place.height) < fitting.height, NSScroller.preferredScrollerStyle == .legacy {
+            panelWidth += NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)
+        }
+        let size = NSSize(width: panelWidth, height: CGFloat(place.height))
+        scroll.frame = NSRect(origin: .zero, size: size)
+        scroll.contentView.scroll(to: .zero)  // top of the list
+        scroll.reflectScrolledClipView(scroll.contentView)
+        let x = min(max(tile.minX, visible.minX), visible.maxX - panelWidth)
+        setFrame(NSRect(origin: NSPoint(x: x, y: CGFloat(place.y)), size: size), display: true)
         orderFrontRegardless()
+    }
+
+    /// Adds a row (a display tile or an app) as wide as the column.
+    private func addFullWidth(_ row: NSView) {
+        stack.addArrangedSubview(row)
+        row.widthAnchor.constraint(equalTo: stack.widthAnchor,
+                                   constant: -(stack.edgeInsets.left + stack.edgeInsets.right)).isActive = true
     }
 
     /// True when `point` (screen coordinates) is on the column.
@@ -681,9 +584,81 @@ final class AppsPanel: FloatingPanel {
     }
 }
 
+/// A display's tile in the apps column: its name; a click goes to that
+/// display's Space of the hovered logical space. Strong orange when that Space
+/// is on screen; an unplugged display's name faded. Glows under the pointer.
+@MainActor
+final class DisplayChoiceView: NSView {
+    var onClick: (() -> Void)?
+    private let isCurrent: Bool
+    private var highlighted = false {
+        didSet { if highlighted != oldValue { needsDisplay = true } }
+    }
+
+    init(_ choice: AppsPanel.Choice) {
+        isCurrent = choice.isCurrent
+        super.init(frame: .zero)
+        let label = NSTextField(labelWithString: choice.name.uppercased())
+        label.font = NSFont.systemFont(ofSize: 9, weight: .semibold)
+        label.textColor = choice.isCurrent ? .black : (choice.faded ? .tertiaryLabelColor : .secondaryLabelColor)
+        label.lineBreakMode = .byTruncatingTail
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 7),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -7),
+            label.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
+        ])
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel("Go to \(choice.name)'s Space" + (choice.isCurrent ? ", shown now" : ""))
+        toolTip = "Go to this display's Space"
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func accessibilityPerformPress() -> Bool {
+        onClick?()
+        return true
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        resetTrackingArea(.mouseEnteredAndExited)
+    }
+
+    override func mouseEntered(with event: NSEvent) { highlighted = true }
+    override func mouseExited(with event: NSEvent) { highlighted = false }
+    override func mouseDown(with event: NSEvent) { onClick?() }
+
+    /// Drawn (not layer colours), so it follows light and dark mode.
+    override func draw(_ dirtyRect: NSRect) {
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.75, dy: 0.75), xRadius: 5, yRadius: 5)
+        path.lineWidth = 1.2
+        if isCurrent {
+            Palette.strong.setFill()
+            path.fill()
+        } else if highlighted {
+            NSColor.controlAccentColor.withAlphaComponent(0.22).setFill()
+            path.fill()
+        }
+        (isCurrent ? Palette.strong : (highlighted ? NSColor.controlAccentColor : NSColor.separatorColor)).setStroke()
+        path.stroke()
+    }
+}
+
+/// The apps column's scrolling content, laid out from the top.
+private final class FlippedStackHolder: NSView {
+    override var isFlipped: Bool { true }
+}
+
 /// The column's background; reports when the pointer leaves it.
 @MainActor
-final class AppsBoxView: NSView {
+final class AppsBoxView: PanelBoxView {
     var onExit: (() -> Void)?
 
     override func updateTrackingAreas() {

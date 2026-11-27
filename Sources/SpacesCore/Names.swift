@@ -37,9 +37,37 @@ public enum NameSanitizer {
     }
 }
 
-/// The user's names for Spaces and displays.
+/// What a logical space's tile shows instead of its number ("Tile displayed").
+public enum TileLabel {
+    /// The room a two-digit number takes on the square tile.
+    public static let maxLength = 2
+
+    /// Cleaned like a name, then cut to `maxLength` characters (user-perceived,
+    /// so emoji are never split) and trimmed again.
+    public static func sanitize(_ input: String) -> String {
+        String(NameSanitizer.sanitize(input).prefix(maxLength)).trimmingCharacters(in: .whitespaces)
+    }
+}
+
+/// Space names and tile labels to store together, as one undoable change.
+/// An empty string clears the entry.
+public struct NameChange: Equatable, Sendable {
+    /// Space name key → name.
+    public var spaces: [String: String]
+    /// Logical space key (`LogicalSpaces.Column.labelKey`) → tile label.
+    public var labels: [String: String]
+
+    public init(spaces: [String: String] = [:], labels: [String: String] = [:]) {
+        self.spaces = spaces
+        self.labels = labels
+    }
+
+    public var isEmpty: Bool { spaces.isEmpty && labels.isEmpty }
+}
+
+/// The user's names for Spaces and displays, and the tile labels of logical spaces.
 ///
-/// Stored as two plain `[String: String]` dictionaries in the app's own
+/// Stored as plain `[String: String]` dictionaries in the app's own
 /// preferences. Everything read back is re-validated, because the file can be
 /// edited by anything running as the user.
 public struct Names: Equatable, Sendable {
@@ -48,26 +76,30 @@ public struct Names: Equatable, Sendable {
 
     public private(set) var spaces: [String: String]
     public private(set) var displays: [String: String]
+    /// Logical space key (its folded name) → what its tile shows instead of the number.
+    public private(set) var labels: [String: String]
 
     public init() {
         spaces = [:]
         displays = [:]
+        labels = [:]
     }
 
     /// Builds from untrusted stored values. Anything malformed is dropped.
-    public init(storedSpaces: Any?, storedDisplays: Any?) {
-        spaces = Names.validate(storedSpaces)
-        displays = Names.validate(storedDisplays)
+    public init(storedSpaces: Any?, storedDisplays: Any?, storedLabels: Any? = nil) {
+        spaces = Names.validate(storedSpaces, clean: NameSanitizer.sanitize)
+        displays = Names.validate(storedDisplays, clean: NameSanitizer.sanitize)
+        labels = Names.validate(storedLabels, clean: TileLabel.sanitize)
     }
 
-    static func validate(_ raw: Any?) -> [String: String] {
+    static func validate(_ raw: Any?, clean: (String) -> String) -> [String: String] {
         guard let dict = raw as? [String: Any] else { return [:] }
         var result: [String: String] = [:]
         for (key, value) in dict {
             if result.count >= maxEntries { break }
             guard key.count <= maxKeyLength, !key.isEmpty, let name = value as? String else { continue }
-            let clean = NameSanitizer.sanitize(name)
-            if !clean.isEmpty { result[key] = clean }
+            let cleaned = clean(name)
+            if !cleaned.isEmpty { result[key] = cleaned }
         }
         return result
     }
@@ -92,21 +124,61 @@ public struct Names: Equatable, Sendable {
         displays[display.nameKey] ?? defaultName
     }
 
+    /// The tile label stored for a logical space, if any.
+    public func label(forLogicalKey key: String) -> String? {
+        labels[key]
+    }
+
     // MARK: Writing
 
     /// Sets or clears (empty string) a Space name. `liveKeys` are the keys in use
     /// right now; they are kept when old entries must be dropped to stay under the cap.
     public mutating func setName(_ name: String, for space: Space, liveKeys: Set<String>) {
-        Names.set(&spaces, key: space.nameKey, name: name, liveKeys: liveKeys)
+        setName(name, forSpaceKey: space.nameKey, liveKeys: liveKeys)
+    }
+
+    /// Sets or clears (empty string) the name stored under a Space's name key
+    /// (used to undo renames, and to rename every Space of a logical space).
+    public mutating func setName(_ name: String, forSpaceKey key: String, liveKeys: Set<String>) {
+        Names.set(&spaces, key: key, name: name, liveKeys: liveKeys)
+    }
+
+    /// The user's name stored under a Space's name key, if any.
+    public func storedName(forSpaceKey key: String) -> String? {
+        spaces[key]
     }
 
     public mutating func setName(_ name: String, for display: Display, liveKeys: Set<String>) {
         Names.set(&displays, key: display.nameKey, name: name, liveKeys: liveKeys)
     }
 
-    static func set(_ dict: inout [String: String], key: String, name: String, liveKeys: Set<String>) {
-        guard key.count <= maxKeyLength else { return }
-        let clean = NameSanitizer.sanitize(name)
+    /// Sets or clears (empty string) a logical space's tile label. `liveKeys`
+    /// are the logical keys in use right now.
+    public mutating func setLabel(_ label: String, forLogicalKey key: String, liveKeys: Set<String>) {
+        Names.set(&labels, key: key, name: label, liveKeys: liveKeys, clean: TileLabel.sanitize)
+    }
+
+    /// Stores a change and returns its inverse (what was stored before, empty
+    /// where nothing was), which undoes it when applied.
+    @discardableResult
+    public mutating func apply(_ change: NameChange, liveSpaceKeys: Set<String>, liveLabelKeys: Set<String>)
+        -> NameChange {
+        var inverse = NameChange()
+        for (key, name) in change.spaces {
+            inverse.spaces[key] = spaces[key] ?? ""
+            setName(name, forSpaceKey: key, liveKeys: liveSpaceKeys)
+        }
+        for (key, label) in change.labels {
+            inverse.labels[key] = labels[key] ?? ""
+            setLabel(label, forLogicalKey: key, liveKeys: liveLabelKeys)
+        }
+        return inverse
+    }
+
+    static func set(_ dict: inout [String: String], key: String, name: String, liveKeys: Set<String>,
+                    clean sanitize: (String) -> String = NameSanitizer.sanitize) {
+        guard key.count <= maxKeyLength, !key.isEmpty else { return }
+        let clean = sanitize(name)
         if clean.isEmpty {
             dict[key] = nil
             return

@@ -47,6 +47,14 @@ final class NamesTests: XCTestCase {
         XCTAssertEqual(names.name(for: snap.displays[0], defaultName: "x"), "Studio")
     }
 
+    func testSetNameByKeyAndClear() {
+        var names = Names()
+        names.setName(" Home ", forSpaceKey: "U-1", liveKeys: [])
+        XCTAssertEqual(names.storedName(forSpaceKey: "U-1"), "Home")
+        names.setName("", forSpaceKey: "U-1", liveKeys: [])
+        XCTAssertNil(names.storedName(forSpaceKey: "U-1"))
+    }
+
     func testValidatesStoredValues() {
         let stored: [String: Any] = ["space:ok": "HOME", "space:num": 5, "space:long": String(repeating: "y", count: 99),
                                      "": "empty-key", "space:blank": "  "]
@@ -75,5 +83,46 @@ final class NamesTests: XCTestCase {
         XCTAssertEqual(names.name(for: space), "NEW")
         XCTAssertEqual(names.spaces["space:old0"], "n")
         XCTAssertLessThanOrEqual(names.spaces.count, Names.maxEntries)
+    }
+
+    // MARK: Tile labels (Tile displayed)
+
+    func testTileLabelSanitize() {
+        XCTAssertEqual(TileLabel.sanitize(" h "), "h")
+        XCTAssertEqual(TileLabel.sanitize("Home"), "Ho")
+        XCTAssertEqual(TileLabel.sanitize("10"), "10")
+        XCTAssertEqual(TileLabel.sanitize("🇵🇱🇵🇱🇵🇱"), "🇵🇱🇵🇱", "never splits a character")
+        XCTAssertEqual(TileLabel.sanitize("A\u{202E}B"), "AB")
+        XCTAssertEqual(TileLabel.sanitize("A B"), "A", "a space left at the end is trimmed")
+        XCTAssertEqual(TileLabel.sanitize("\n\t"), "")
+    }
+
+    func testSetAndClearLabel() {
+        var names = Names()
+        names.setLabel(" H ", forLogicalKey: "home", liveKeys: [])
+        XCTAssertEqual(names.label(forLogicalKey: "home"), "H")
+        names.setLabel("", forLogicalKey: "home", liveKeys: [])
+        XCTAssertNil(names.label(forLogicalKey: "home"))
+    }
+
+    func testValidatesStoredLabels() {
+        let stored: [String: Any] = ["home": "H", "music": "Music", "tech": 7, "blank": " ", "": "E"]
+        let names = Names(storedSpaces: nil, storedDisplays: nil, storedLabels: stored)
+        XCTAssertEqual(names.labels, ["home": "H", "music": "Mu"])
+        XCTAssertTrue(Names(storedSpaces: nil, storedDisplays: nil, storedLabels: "garbage").labels.isEmpty)
+    }
+
+    func testApplyStoresNamesAndLabelsAndReturnsTheInverse() {
+        let before = Names(storedSpaces: ["U-1": "Home"], storedDisplays: nil, storedLabels: ["home": "H"])
+        var names = before
+        let change = NameChange(spaces: ["U-1": "House", "U-2": "House"], labels: ["house": "H", "home": ""])
+        let inverse = names.apply(change, liveSpaceKeys: [], liveLabelKeys: [])
+        XCTAssertEqual(names.storedName(forSpaceKey: "U-1"), "House")
+        XCTAssertEqual(names.storedName(forSpaceKey: "U-2"), "House")
+        XCTAssertEqual(names.label(forLogicalKey: "house"), "H")
+        XCTAssertNil(names.label(forLogicalKey: "home"))
+        XCTAssertEqual(inverse, NameChange(spaces: ["U-1": "Home", "U-2": ""], labels: ["house": "", "home": "H"]))
+        names.apply(inverse, liveSpaceKeys: [], liveLabelKeys: [])
+        XCTAssertEqual(names, before)
     }
 }
