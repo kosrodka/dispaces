@@ -23,10 +23,12 @@ public enum MenuBarGeometry {
             self.inset = inset
         }
 
-        /// Tiles fit the menu bar's height (22 pt, or 24 pt beside the notch)
-        /// with a little room above and below.
+        /// Tiles fit the height macOS gives menu bar items (22 pt), 1 pt clear
+        /// of each edge, at most 20 pt (owner's choice, 27 Nov 2026; was 16).
+        /// The menu bars themselves are taller (about 30 pt, 33 pt beside the
+        /// notch), so there's still room around them.
         public static func forMenuBar(thickness: Double) -> Metrics {
-            let tile = min(max((thickness - 6).rounded(), 12), 20)
+            let tile = min(max((thickness - 2).rounded(), 12), 20)
             return Metrics(tile: tile, gap: 3, groupGap: 9, subgroupGap: 6, inset: 3)
         }
     }

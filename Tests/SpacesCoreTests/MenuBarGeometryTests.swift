@@ -5,8 +5,9 @@ final class MenuBarGeometryTests: XCTestCase {
     private let metrics = MenuBarGeometry.Metrics(tile: 16, gap: 3, groupGap: 9, subgroupGap: 6, inset: 3)
 
     func testMetricsFollowTheMenuBarHeight() {
-        XCTAssertEqual(MenuBarGeometry.Metrics.forMenuBar(thickness: 22).tile, 16)
-        XCTAssertEqual(MenuBarGeometry.Metrics.forMenuBar(thickness: 24).tile, 18)
+        XCTAssertEqual(MenuBarGeometry.Metrics.forMenuBar(thickness: 22).tile, 20, "the size macOS reports today")
+        XCTAssertEqual(MenuBarGeometry.Metrics.forMenuBar(thickness: 24).tile, 20)
+        XCTAssertEqual(MenuBarGeometry.Metrics.forMenuBar(thickness: 18).tile, 16, "1 pt clear of each edge")
         XCTAssertEqual(MenuBarGeometry.Metrics.forMenuBar(thickness: 0).tile, 12)
         XCTAssertEqual(MenuBarGeometry.Metrics.forMenuBar(thickness: 100).tile, 20)
     }
