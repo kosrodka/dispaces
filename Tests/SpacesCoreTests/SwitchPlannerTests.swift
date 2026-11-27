@@ -93,6 +93,13 @@ final class SwitchPlannerTests: XCTestCase {
         XCTAssertEqual(SwitchPlanner.order([cell(2), cell(4)], pointerDisplay: "CCCC").map(\.space.managedID), [2, 4])
     }
 
+    func testOrderFindsThePointerDisplayByWhereTheSpaceIsNow() {
+        // An unplugged display's Space that macOS moved onto A goes last when A was clicked.
+        let moved = LogicalSpaces.Cell(display: "CCCC-3333", space: snap.locate(spaceID: 2)!.space, isCurrent: false,
+                                       onDisplay: "AAAA-1111")
+        XCTAssertEqual(SwitchPlanner.order([moved, cell(4)], pointerDisplay: "AAAA-1111").map(\.space.managedID), [4, 2])
+    }
+
     func testRefocusPressesOwnShortcutWhenFocusIsElsewhere() {
         // A shows 3, B shows 5, and B has the focus.
         let focusedB = SnapshotParser.parse(Fixtures.twoDisplays, activeSpaceID: 5)

@@ -187,6 +187,22 @@ final class DisplayOverviewTests: XCTestCase {
         XCTAssertFalse(DisplayOverview.canMove(overview.sections[0].rows[0], to: "AAAA-1111"), "not a ghost")
     }
 
+    func testAnUnpluggedDisplaysSpaceOnScreenIsCurrent() {
+        var memory = DisplayMemory()
+        memory.update(with: Fixtures.twoDisplaysSnapshot, displayName: { "Name " + $0.identifier.prefix(4) },
+                      spaceName: { "Desk \($0.managedID)" }, now: 1000)
+        // B unplugged; A shows B's Space 4, which macOS moved there.
+        let unplugged = SnapshotParser.parse([
+            Fixtures.display("AAAA-1111", current: 4, spaces: [
+                Fixtures.space(1), Fixtures.space(2, uuid: "U-2"), Fixtures.space(3, uuid: "U-3"), Fixtures.space(4),
+            ]),
+        ])
+        let overview = DisplayOverview(snapshot: unplugged, memory: memory, names: Names(),
+                                       displayName: { _ in "Built-in" })
+        XCTAssertEqual(overview.sections[0].rows.map(\.isCurrent), [false, false, false])
+        XCTAssertEqual(overview.sections[1].rows.map(\.isCurrent), [true, false])
+    }
+
     func testConnectedDisplaysFollowScreenOrder() {
         let overview = DisplayOverview(snapshot: Fixtures.twoDisplaysSnapshot, memory: DisplayMemory(), names: Names(),
                                        screenOrder: ["bbbb-2222", "AAAA-1111"], displayName: { $0.identifier })

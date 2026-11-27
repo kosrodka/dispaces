@@ -9,6 +9,8 @@ final class Preferences {
     private enum Key {
         static let spaceNames = "spaceNames"
         static let displayNames = "displayNames"
+        /// Logical space key → what its tile shows instead of the number.
+        static let tileLabels = "tileLabels"
         static let fallbackBar = "fallbackBar"
         static let showAppsOnHover = "showAppsOnHover"
         static let dragWindows = "dragWindows"
@@ -21,7 +23,8 @@ final class Preferences {
 
     init() {
         names = Names(storedSpaces: defaults.object(forKey: Key.spaceNames),
-                      storedDisplays: defaults.object(forKey: Key.displayNames))
+                      storedDisplays: defaults.object(forKey: Key.displayNames),
+                      storedLabels: defaults.object(forKey: Key.tileLabels))
         memory = DisplayMemory(stored: defaults.object(forKey: Key.displayMemory))
         // v0.1 kept one position for a single bar; it no longer applies.
         // (The floating bars' later positions, sizes and locks, and the old
@@ -35,6 +38,7 @@ final class Preferences {
         change(&names)
         defaults.set(names.spaces, forKey: Key.spaceNames)
         defaults.set(names.displays, forKey: Key.displayNames)
+        defaults.set(names.labels, forKey: Key.tileLabels)
     }
 
     /// Which Spaces belong to which display, including unplugged displays.

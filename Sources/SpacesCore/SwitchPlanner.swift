@@ -63,11 +63,12 @@ public enum SwitchPlanner {
 
     /// The order to switch a logical space's displays in: the displays that
     /// aren't showing their Space yet, in the given (display) order, with the
-    /// display under the pointer (where the user clicked) last, so it keeps the focus.
+    /// display under the pointer (where the user clicked) last, so it keeps the
+    /// focus. A Space counts on the display it's on now (`onDisplay`).
     public static func order(_ cells: [LogicalSpaces.Cell], pointerDisplay: String?) -> [LogicalSpaces.Cell] {
         let pending = cells.filter { !$0.isCurrent }
         guard let pointer = pointerDisplay else { return pending }
-        let onPointer = { (cell: LogicalSpaces.Cell) in cell.display.caseInsensitiveCompare(pointer) == .orderedSame }
+        let onPointer = { (cell: LogicalSpaces.Cell) in cell.onDisplay.caseInsensitiveCompare(pointer) == .orderedSame }
         return pending.filter { !onPointer($0) } + pending.filter(onPointer)
     }
 
@@ -76,7 +77,7 @@ public enum SwitchPlanner {
     /// shows now, so the focus stays on the display the user clicked on.
     public static func focusTarget(_ column: LogicalSpaces.Column, pointerDisplay: Display?) -> UInt64? {
         guard let display = pointerDisplay else { return nil }
-        return column.cell(on: display.identifier)?.space.managedID ?? display.currentSpaceID
+        return column.switchCell(on: display.identifier)?.space.managedID ?? display.currentSpaceID
     }
 
     /// After switching several displays, the focus may have moved to another

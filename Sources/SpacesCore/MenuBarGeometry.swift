@@ -100,6 +100,30 @@ public enum MenuBarGeometry {
         case gap
     }
 
+    /// Where the apps column goes (screen coordinates, y up): under the tile
+    /// when it fits there, else over it when it fits there, else on the side
+    /// with more room, cut to that room (it then scrolls).
+    public static func appsColumn(height: Double, tileBottom: Double, tileTop: Double,
+                                  visibleBottom: Double, visibleTop: Double, gap: Double) -> (y: Double, height: Double) {
+        let below = max(tileBottom - gap - visibleBottom, 0)
+        let above = max(visibleTop - tileTop - gap, 0)
+        if height <= below || (height > above && below >= above) {
+            let cut = min(height, below)
+            return (tileBottom - gap - cut, cut)
+        }
+        return (tileTop + gap, min(height, above))
+    }
+
+    /// Whether a click on a logical space switches only the display it was
+    /// clicked on: Option held, without Control (Control-click opens the menu).
+    /// macOS drops Option from the click event of a menu bar item, so the keys
+    /// held when the click arrived (`liveModifiers`) count too. Both use the
+    /// `KeyCombo` bit layout, which is also `NSEvent.ModifierFlags`'.
+    public static func thisDisplayOnly(eventModifiers: UInt64, liveModifiers: UInt64) -> Bool {
+        let held = eventModifiers | liveModifiers
+        return held & KeyCombo.option != 0 && held & KeyCombo.control == 0
+    }
+
     /// A tile counts half the small gap on each side as its own, so every
     /// click between two neighbouring tiles lands on one of them.
     public static func hit(x: Double, in layout: Layout, metrics: Metrics) -> Hit {

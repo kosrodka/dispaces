@@ -42,9 +42,9 @@ Already cloned? Run `cd dispaces && git pull` and then the same block from `git 
 
 1. **Turn on the Space shortcuts:** System Settings › Keyboard › Keyboard Shortcuts… › Mission Control › tick **Switch to Desktop 1** … up to your number of desktops (macOS shows entries only for desktops that exist). Leave the default keys (Control-1, Control-2, …) or pick your own; the app reads whatever you set. Also keep **Move left a space / Move right a space** ticked (used for full-screen Spaces).
 2. **Click any tile.** macOS asks for **Accessibility** access for Dispaces. Allow it (System Settings › Privacy & Security › Accessibility). Click the tile again.
-3. **Name things:** double-click a tile (or right-click › Rename Space…). Right-click a display name › Rename display….
+3. **Name things:** right-click the tiles › Manage displays and spaces, then double-click a column heading, a Space or a display name.
 4. **Place the tiles:** they appear in the menu bar, one group per display. Hold Command and drag them towards the clock, so macOS hides them last when the menu bar gets full.
-5. **Optional:** right-click the tiles › Launch at login.
+5. **Optional:** right-click the tiles › Manage displays and spaces › Advanced › tick Launch at login.
 
 Check everything at once: right-click the tiles › **Setup check…**. All four lines should show ✓ and the amber **!** disappears from the menu bar.
 
@@ -54,10 +54,10 @@ Check everything at once: right-click the tiles › **Setup check…**. All four
 |---|---|
 | Switch Space | Click its tile: every display switches to that logical space. Option-click: only the display whose menu bar you clicked |
 | Open the menu | Right-click (or Control-click) the tiles in the menu bar |
-| Rename | Right-click a tile › Rename (every display's Space in that logical space), or double-click a heading or Space in Manage displays and spaces |
-| Keep the tiles visible | Command-drag them towards the clock (macOS hides the items furthest from it first). If macOS hides them anyway, the floating fallback bar appears at the top of the main display; turn it off with the menu › Floating bar when the menu bar item is hidden |
-| Move a window to another Space | Turn on the menu › Option-Control-drag windows to Spaces (once). Grab the window by its title bar, then hold Option and Control and drag the pointer onto a tile in the menu bar. Wait until the tile has had its thick ring for a moment and the Space changes, then let go |
-| See which apps are on a Space | Rest the pointer on its tile. Turn off with the menu › Show apps on hover |
+| Rename | In Manage displays and spaces: double-click a heading (every display's Space in that logical space) or a Space (just that one). The menu bar's menu has no Rename |
+| Keep the tiles visible | Command-drag them towards the clock (macOS hides the items furthest from it first). If macOS hides them anyway, the floating fallback bar appears at the top of the main display; turn it off in Manage displays and spaces › Advanced › Floating bar when the menu bar item is hidden |
+| Move a window to another Space | Turn on Manage displays and spaces › Advanced › Option-Control-drag windows to Spaces (once). Grab the window by its title bar, then hold Option and Control and drag the pointer onto a tile in the menu bar. Wait until the tile has had its thick ring for a moment and the Space changes, then let go |
+| See which apps are on a Space | Rest the pointer on its tile. Turn off in Manage displays and spaces › Advanced › Show apps on hover |
 | Jump to an app on a Space | Rest on the tile, move into the column and click the app |
 | Show or hide first Spaces | `defaults write io.github.kosrodka.SpacesBar firstSpaceExternal -bool true` (or `firstSpaceBuiltIn -bool false`), then the menu › Refresh now |
 | Read the manual or check the version | The menu › Help › User manual, or Help › Current release |
@@ -93,7 +93,7 @@ defaults import io.github.kosrodka.SpacesBar ~/dispaces-backup.plist
 
 ## 6.7 Uninstall (leaves nothing behind)
 
-1. Right-click the tiles › untick Launch at login › Quit Dispaces.
+1. Right-click the tiles › Manage displays and spaces › Advanced › untick Launch at login; then right-click the tiles › Quit Dispaces.
 2. `rm -rf /Applications/Dispaces.app`
 3. `defaults delete io.github.kosrodka.SpacesBar`
 4. System Settings › Privacy & Security › Accessibility › remove Dispaces.
@@ -143,6 +143,7 @@ P6 corrupt preferences: expect the app to start with default names, no crash:
 pkill -x Dispaces
 defaults export io.github.kosrodka.SpacesBar /tmp/dispaces-backup.plist
 defaults write io.github.kosrodka.SpacesBar spaceNames -string garbage
+defaults write io.github.kosrodka.SpacesBar tileLabels -string garbage
 defaults write io.github.kosrodka.SpacesBar displayMemory -string nope
 open "$APP"; sleep 3; pgrep -x Dispaces && echo "still running: PASS"
 pkill -x Dispaces; defaults import io.github.kosrodka.SpacesBar /tmp/dispaces-backup.plist; open "$APP"

@@ -98,7 +98,7 @@ The keyboard-shortcut method has one more advantage: the app can **read** your s
 6. Any failure: red ring on the tile and a message naming the display and the fix.
 
 **Rename**
-Right-click a tile › Rename, or double-click in the Manage window → small dialog → name cleaned by `NameStore.sanitize` (trim, max 24 characters, control and text-direction override characters removed) → saved to the app's own preferences → tiles redraw.
+Double-click (or right-click › Rename) in the Manage window; the menu bar's menu has no Rename → small dialog → name cleaned by `NameSanitizer.sanitize` (trim, max 24 characters, control and text-direction override characters removed) → saved to the app's own preferences → tiles redraw.
 
 ## 2.4 How names are remembered
 

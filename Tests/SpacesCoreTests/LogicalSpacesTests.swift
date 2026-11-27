@@ -90,22 +90,119 @@ final class LogicalSpacesTests: XCTestCase {
         XCTAssertEqual(logical(snapshot, names).columns[1].cell(on: "bbbb-2222")?.space.managedID, 5)
     }
 
-    func testExcludesFullScreenHiddenFirstAndGhosts() {
-        // B was unplugged: macOS moved its Spaces 4 and 5 onto A; the app remembers them as B's.
-        let (before, _) = make([("AAAA-1111", 1, [(1, "Home")]), ("BBBB-2222", 4, [(4, "Home"), (5, "Music")])])
-        var memory = DisplayMemory()
-        memory.update(with: before, displayName: { $0.identifier }, spaceName: { "\($0.managedID)" }, now: 1)
-        let (after, names) = make([("AAAA-1111", 1, [(1, "Home"), (2, "Music"), (4, "Home"), (5, "Music")])],
-                                  fullScreen: ["AAAA-1111": 9])
-        let result = logical(after, names, memory: memory)
-        XCTAssertEqual(result.columns.map(\.title), ["Home", "Music"])
+    func testFullScreenAndHiddenFirstSpacesAreNotInColumns() {
+        let (snapshot, names) = make([("AAAA-1111", 1, [(1, "Home"), (2, "Music")])], fullScreen: ["AAAA-1111": 9])
+        let result = logical(snapshot, names)
         XCTAssertEqual(result.columns.flatMap(\.cells).map(\.space.managedID), [1, 2])
         XCTAssertEqual(result.fullScreen.map(\.space.managedID), [9])
 
-        let (snapshot, names2) = homeMusicTech
-        let hidden = logical(snapshot, names2, showsFirstSpace: { $0 != "BBBB-2222" })
+        let (snapshot2, names2) = homeMusicTech
+        let hidden = logical(snapshot2, names2, showsFirstSpace: { $0 != "BBBB-2222" })
         XCTAssertNil(hidden.columns[0].cell(on: "BBBB-2222"), "B's first Space is hidden")
         XCTAssertEqual(hidden.columns[1].cell(on: "BBBB-2222")?.space.managedID, 5)
+    }
+
+    // MARK: Unplugged displays
+
+    /// B (whose first Space is `bSpaces[0]`) was unplugged: macOS moved its
+    /// Spaces onto A, and the app remembers them as B's.
+    private func unplugged(_ bSpaces: [(Int, String?)], bFullScreen: Int? = nil,
+                           after aSpaces: [(Int, String?)], aCurrent: Int = 1, aFullScreen: Int? = nil)
+        -> (Snapshot, Names, DisplayMemory) {
+        let (before, _) = make([("AAAA-1111", 1, [(1, "Home")]), ("BBBB-2222", bSpaces[0].0, bSpaces)],
+                               fullScreen: bFullScreen.map { ["BBBB-2222": $0] } ?? [:])
+        var memory = DisplayMemory()
+        memory.update(with: before, displayName: { $0.identifier }, spaceName: { "\($0.managedID)" }, now: 1)
+        let (after, names) = make([("AAAA-1111", aCurrent, aSpaces)],
+                                  fullScreen: aFullScreen.map { ["AAAA-1111": $0] } ?? [:])
+        return (after, names, memory)
+    }
+
+    private var homeMusicUnplugged: (Snapshot, Names, DisplayMemory) {
+        unplugged([(4, "Home"), (5, "Music")], after: [(1, "Home"), (2, "Music"), (4, "Home"), (5, "Music")])
+    }
+
+    func testUnpluggedDisplaysSpacesStayInTheirLogicalSpaces() {
+        let (after, names, memory) = unplugged([(4, "Home"), (5, "Music")], bFullScreen: 8,
+                                               after: [(1, "Home"), (2, "Music"), (4, "Home"), (5, "Music")],
+                                               aFullScreen: 8)
+        let result = logical(after, names, memory: memory)
+        XCTAssertEqual(result.columns.map(\.title), ["Home", "Music"], "no columns of their own")
+        let home = result.columns[0]
+        XCTAssertEqual(home.cells.map(\.space.managedID), [1, 4])
+        XCTAssertEqual(home.cells.map(\.display), ["AAAA-1111", "BBBB-2222"], "listed under the unplugged display")
+        XCTAssertEqual(home.cells.map(\.onDisplay), ["AAAA-1111", "AAAA-1111"], "where macOS has it now")
+        XCTAssertEqual(home.cells.map(\.isDisconnected), [false, true])
+        XCTAssertEqual(home.cell(on: "BBBB-2222")?.space.managedID, 4)
+        XCTAssertEqual(result.columns[1].cells.map(\.space.managedID), [2, 5])
+        XCTAssertEqual(result.fullScreen.map(\.space.managedID), [8], "its full-screen Space is an FS tile where it is now")
+        XCTAssertEqual(result.fullScreen.map(\.display), ["AAAA-1111"])
+    }
+
+    func testAClickSwitchesOnlyConnectedDisplaysOwnSpaces() {
+        let (after, names, memory) = homeMusicUnplugged
+        let home = logical(after, names, memory: memory).columns[0]
+        XCTAssertEqual(home.switchCells.map(\.space.managedID), [1], "A shows its own Home, B's stays where it is")
+        XCTAssertEqual(home.switchCell(on: "AAAA-1111")?.space.managedID, 1)
+    }
+
+    func testALogicalSpaceOnlyAnUnpluggedDisplayHasSwitchesItWhereItIs() {
+        let (after, names, memory) = unplugged([(4, "Home"), (5, "Gaming")], after: [(1, "Home"), (4, "Home"), (5, "Gaming")])
+        let result = logical(after, names, memory: memory)
+        XCTAssertEqual(result.columns.map(\.title), ["Home", "Gaming"])
+        let gaming = result.columns[1]
+        XCTAssertEqual(gaming.number, 2)
+        XCTAssertEqual(gaming.switchCells.map(\.space.managedID), [5])
+        XCTAssertEqual(gaming.switchCell(on: "AAAA-1111")?.space.managedID, 5, "found by the display it's on now")
+        XCTAssertNil(gaming.switchCell(on: "BBBB-2222"))
+    }
+
+    func testHighlightCountsAnUnpluggedDisplaysSpaceOnTheDisplayShowingIt() {
+        let (after, names, memory) = unplugged([(4, "Home"), (5, "Music")],
+                                               after: [(1, "Home"), (2, "Music"), (4, "Home"), (5, "Music")], aCurrent: 4)
+        let result = logical(after, names, memory: memory)
+        let home = result.columns[0]
+        XCTAssertEqual(home.cells.map(\.isCurrent), [false, true])
+        XCTAssertEqual(home.highlight(seenFrom: "AAAA-1111"), .here, "A shows B's Home")
+        XCTAssertEqual(home.state, .all)
+        XCTAssertEqual(result.columns[1].highlight(seenFrom: "AAAA-1111"), .none)
+    }
+
+    func testASpaceIsStrongOnlyWhenItIsTheOneOnScreen() {
+        // A shows B's Home (4), not its own (1).
+        let (after, names, memory) = unplugged([(4, "Home"), (5, "Music")],
+                                               after: [(1, "Home"), (2, "Music"), (4, "Home"), (5, "Music")], aCurrent: 4)
+        let home = logical(after, names, memory: memory).columns[0]
+        XCTAssertEqual(home.cells.map { home.highlight(of: $0) }, [.elsewhere, .here])
+
+        // Connected only: A shows Home (1), B shows Tech (6).
+        let (snapshot, plain) = homeMusicTech
+        let columns = logical(snapshot, plain).columns
+        XCTAssertEqual(columns[0].cells.map { columns[0].highlight(of: $0) }, [.here, .elsewhere])
+        XCTAssertEqual(columns[1].cells.map { columns[1].highlight(of: $0) }, [.none, .none])
+        XCTAssertEqual(columns[2].cells.map { columns[2].highlight(of: $0) }, [.elsewhere, .here])
+    }
+
+    func testUnpluggedDisplaysFirstSpaceFollowsTheFirstSpaceRule() {
+        let (after, names, memory) = homeMusicUnplugged
+        let result = logical(after, names, memory: memory, showsFirstSpace: { $0 != "BBBB-2222" })
+        XCTAssertEqual(result.columns[0].cells.map(\.space.managedID), [1], "B's first Space (4) is hidden")
+        XCTAssertEqual(result.columns[1].cells.map(\.space.managedID), [2, 5])
+    }
+
+    func testKnowsWhenItHasAnUnpluggedDisplaysSpace() {
+        let (after, names, memory) = unplugged([(4, "Home"), (5, "Gaming")],
+                                               after: [(1, "Home"), (2, "Music"), (4, "Home"), (5, "Gaming")])
+        let result = logical(after, names, memory: memory)
+        XCTAssertEqual(result.columns.map(\.title), ["Home", "Music", "Gaming"])
+        XCTAssertEqual(result.columns.map(\.includesUnplugged), [true, false, true])
+    }
+
+    func testRenamingALogicalSpaceRenamesTheUnpluggedDisplaysSpaceToo() {
+        let (after, names, memory) = homeMusicUnplugged
+        let home = logical(after, names, memory: memory).columns[0]
+        XCTAssertEqual(Set(home.renameChange(to: "House", names: names).spaces.keys),
+                       Set([1, 4].compactMap { after.locate(spaceID: UInt64($0))?.space.nameKey }))
     }
 
     func testStates() {
@@ -131,6 +228,41 @@ final class LogicalSpacesTests: XCTestCase {
         XCTAssertNil(result.columns[1].customName(in: names), "an unnamed Space has no custom name to offer")
     }
 
+    func testHighlightFollowsTheDisplayYouAreOn() {
+        // A shows Home, B shows Music.
+        let (snapshot, names) = make([("AAAA-1111", 1, [(1, "Home"), (2, "Music")]),
+                                      ("BBBB-2222", 5, [(4, "Home"), (5, "Music")])])
+        let columns = logical(snapshot, names).columns
+        XCTAssertEqual(columns.map { $0.highlight(seenFrom: "AAAA-1111") }, [.here, .elsewhere])
+        XCTAssertEqual(columns.map { $0.highlight(seenFrom: "bbbb-2222") }, [.elsewhere, .here])
+    }
+
+    func testHighlightAfterANormalSwitchIsTheSameEverywhere() {
+        let (snapshot, names) = homeMusicTech  // A shows Home, B shows Tech
+        let (both, names2) = make([("AAAA-1111", 2, [(1, "Home"), (2, "Music")]), ("BBBB-2222", 5, [(4, "Home"), (5, "Music")])])
+        for display in ["AAAA-1111", "BBBB-2222"] {
+            XCTAssertEqual(logical(both, names2).columns.map { $0.highlight(seenFrom: display) }, [.none, .here])
+        }
+        XCTAssertEqual(logical(snapshot, names).columns.map { $0.highlight(seenFrom: "AAAA-1111") },
+                       [.here, .none, .elsewhere])
+    }
+
+    func testHighlightWhenADisplayHasNoSpaceForTheNumber() {
+        // A has Home and Music, B only Home. After switching to Music, A shows Music and B stays on Home.
+        let (snapshot, names) = make([("AAAA-1111", 2, [(1, "Home"), (2, "Music")]), ("BBBB-2222", 4, [(4, "Home")])])
+        let columns = logical(snapshot, names).columns
+        XCTAssertEqual(columns.map { $0.highlight(seenFrom: "AAAA-1111") }, [.elsewhere, .here])
+        XCTAssertEqual(columns.map { $0.highlight(seenFrom: "BBBB-2222") }, [.here, .elsewhere])
+    }
+
+    func testHighlightOfASingleSpace() {
+        XCTAssertEqual(LogicalSpaces.highlight(isCurrent: true, on: "AAAA-1111", seenFrom: "aaaa-1111"), .here)
+        XCTAssertEqual(LogicalSpaces.highlight(isCurrent: true, on: "AAAA-1111", seenFrom: "BBBB-2222"), .elsewhere)
+        XCTAssertEqual(LogicalSpaces.highlight(isCurrent: false, on: "AAAA-1111", seenFrom: "AAAA-1111"), .none)
+        XCTAssertEqual(LogicalSpaces.highlight(isCurrent: true, on: "AAAA-1111", seenFrom: nil), .here,
+                       "focus unknown: showing counts as here")
+    }
+
     func testCombinedList() {
         let (snapshot, names) = make([("Main", 1, [(1, "Home"), (2, "Music"), (3, "Home")])])
         var memory = DisplayMemory()
@@ -150,5 +282,61 @@ final class LogicalSpacesTests: XCTestCase {
         let (names, order) = (homeMusicTech.1, ["BBBB-2222", "AAAA-1111"])
         XCTAssertEqual(logical(snapshot, names, screenOrder: order).columns[0].cells.map(\.display),
                        ["BBBB-2222", "AAAA-1111"])
+    }
+
+    // MARK: Tile displayed
+
+    private func labelled(_ names: Names, _ labels: [String: String]) -> Names {
+        var names = names
+        for (key, label) in labels { names.setLabel(label, forLogicalKey: key, liveKeys: []) }
+        return names
+    }
+
+    func testDisplayedShowsTheLabelOrTheNumber() {
+        let (snapshot, plain) = homeMusicTech
+        let names = labelled(plain, ["home": "H", "tech": "T"])
+        let result = logical(snapshot, names)
+        XCTAssertEqual(result.columns.map { $0.displayed(in: names) }, ["H", "2", "T"])
+        XCTAssertEqual(result.columns.map(\.number), [1, 2, 3], "the numbering doesn't change")
+    }
+
+    func testLabelBelongsToTheNameIgnoringCase() {
+        let (snapshot, plain) = make([("AAAA-1111", 1, [(1, "HOME")]), ("BBBB-2222", 4, [(4, "Home")])])
+        let names = labelled(plain, [LogicalSpaces.groupingKey("home"): "H"])
+        XCTAssertEqual(logical(snapshot, names).columns[0].displayed(in: names), "H")
+    }
+
+    func testDuplicateColumnHasNoLabel() {
+        let (snapshot, plain) = make([("AAAA-1111", 1, [(1, "Home"), (2, "Home")])])
+        let names = labelled(plain, ["home": "H"])
+        let result = logical(snapshot, names)
+        XCTAssertEqual(result.columns[0].labelKey, "home")
+        XCTAssertNil(result.columns[1].labelKey)
+        XCTAssertEqual(result.columns.map { $0.displayed(in: names) }, ["H", "2"])
+    }
+
+    func testRenameMovesTheLabelToTheNewName() {
+        let (snapshot, plain) = homeMusicTech
+        let names = labelled(plain, ["home": "H"])
+        let home = logical(snapshot, names).columns[0]
+        let change = home.renameChange(to: " House ", names: names)
+        XCTAssertEqual(change.spaces, Dictionary(uniqueKeysWithValues: home.cells.map { ($0.space.nameKey, " House ") }))
+        XCTAssertEqual(change.labels, ["house": "H", "home": ""])
+    }
+
+    func testRenameOntoANameWithALabelKeepsThatLabel() {
+        let (snapshot, plain) = homeMusicTech
+        let names = labelled(plain, ["home": "H", "music": "M"])
+        let home = logical(snapshot, names).columns[0]
+        XCTAssertEqual(home.renameChange(to: "music", names: names).labels, [:])
+    }
+
+    func testRenameMovesNoLabelWhenThereIsNothingToMove() {
+        let (snapshot, plain) = homeMusicTech
+        let names = labelled(plain, ["home": "H"])
+        let result = logical(snapshot, names)
+        XCTAssertEqual(result.columns[1].renameChange(to: "Songs", names: names).labels, [:], "Music has no label")
+        XCTAssertEqual(result.columns[0].renameChange(to: "HOME", names: names).labels, [:], "same name")
+        XCTAssertEqual(result.columns[0].renameChange(to: "  ", names: names).labels, [:], "cleared: stays stored")
     }
 }

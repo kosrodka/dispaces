@@ -1,5 +1,4 @@
 import AppKit
-import ServiceManagement
 import SpacesCore
 
 @MainActor
@@ -9,8 +8,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var switcher = SpaceSwitcher(monitor: monitor)
     private lazy var bar = BarController(prefs: prefs, monitor: monitor, switcher: switcher)
     private let menu = NSMenu()
-    /// The tile that was right-clicked to open the menu, offered for renaming.
-    private var menuTarget: TileTarget?
     private lazy var manageWindow = ManageWindowController(bar: bar)
     private lazy var manualWindow = ManualWindowController()
     /// Connected displays, to notice one being plugged in or unplugged.
@@ -21,13 +18,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         menu.delegate = self
-        bar.onMenu = { [weak self] target, view in self?.openMenu(target: target, under: view) }
+        bar.onMenu = { [weak self] view in self?.openMenu(under: view) }
         bar.needsAttention = { [weak self] in self?.setupIssues().isEmpty == false }
         bar.onWarningClick = { [weak self] in self?.showSetupCheck() }
         monitor.onRefresh = { [weak self] snapshot in self?.bar.show(snapshot) }
         bar.onChange = { [weak self] in self?.manageWindow.reload() }
         monitor.start()
-        bar.setDragWatching(prefs.dragWindows)
+        bar.setDragWatching(bar.dragsWindows)
         displays = Self.connectedDisplays()
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged),
                                                name: NSApplication.didChangeScreenParametersNotification, object: nil)
@@ -57,29 +54,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Menu
 
-    /// Opens the menu just under the tiles (right-click, Control-click, or a
-    /// click between displays).
-    private func openMenu(target: TileTarget?, under view: NSView) {
-        menuTarget = target
-        _ = menu.popUp(positioning: nil, at: NSPoint(x: 0, y: -4), in: view)
-        menuTarget = nil
+    /// Opens the menu just under the menu bar (or the floating bar): right-click,
+    /// Control-click, or a click between displays. It has no Rename: renaming
+    /// is only in Manage displays and spaces.
+    ///
+    /// Placed under the bottom of the tiles' window, not of the tiles: beside
+    /// the notch the menu bar is taller than the tiles, so just under the tiles
+    /// is still inside the menu bar, and macOS then hides the menu's first item
+    /// behind a scroll arrow.
+    private func openMenu(under view: NSView) {
+        let left = view.convert(view.bounds, to: nil).minX
+        let point = view.convert(NSPoint(x: left, y: -4), from: nil)
+        _ = menu.popUp(positioning: nil, at: point, in: view)
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        if let target = menuTarget, let name = bar.tileName(target) {
-            let item = NSMenuItem(title: "Rename “\(name)”…", action: #selector(renameSpace(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = TargetBox(target)
-            menu.addItem(item)
-            menu.addItem(.separator())
-        }
-        add(menu, "Floating bar when the menu bar item is hidden", #selector(toggleFallback), checked: bar.showsFallback)
-        add(menu, "Show apps on hover", #selector(toggleAppsOnHover), checked: bar.showsAppsOnHover)
-        add(menu, "Option-Control-drag windows to Spaces", #selector(toggleDragWindows), checked: prefs.dragWindows)
-        add(menu, "Launch at login", #selector(toggleLogin), checked: SMAppService.mainApp.status == .enabled)
-        menu.addItem(.separator())
+        // First, on its own: the window for renaming and the on/off settings (Advanced).
         add(menu, "Manage displays and spaces", #selector(showManageWindow))
+        menu.addItem(.separator())
         let issues = setupIssues().count
         add(menu, issues == 0 ? "Setup check…" : "Setup check… (\(issues) to fix)", #selector(showSetupCheck))
         add(menu, "Refresh now", #selector(refreshNow))
@@ -96,18 +89,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         add(menu, "Quit Dispaces", #selector(quit), key: "q")
     }
 
-    private func add(_ menu: NSMenu, _ title: String, _ action: Selector, checked: Bool = false, key: String = "") {
+    private func add(_ menu: NSMenu, _ title: String, _ action: Selector, key: String = "") {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
         item.target = self
-        item.state = checked ? .on : .off
         menu.addItem(item)
     }
 
-    @objc private func toggleFallback() { bar.setShowsFallback(!bar.showsFallback) }
-    @objc private func renameSpace(_ sender: NSMenuItem) {
-        guard let box = sender.representedObject as? TargetBox else { return }
-        bar.rename(box.target)
-    }
     @objc private func refreshNow() { bar.refreshNow() }
     @objc private func showManageWindow() { manageWindow.show() }
     @objc private func showManual() { manualWindow.show() }
@@ -127,30 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate()
         if alert.runModal() == .alertSecondButtonReturn { manualWindow.show() }
     }
-    @objc private func toggleAppsOnHover() { bar.setShowsAppsOnHover(!bar.showsAppsOnHover) }
-
-    @objc private func toggleDragWindows() {
-        prefs.dragWindows.toggle()
-        bar.setDragWatching(prefs.dragWindows)
-    }
     @objc private func quit() { NSApp.terminate(nil) }
-
-    @objc private func toggleLogin() {
-        do {
-            if SMAppService.mainApp.status == .enabled {
-                try SMAppService.mainApp.unregister()
-            } else {
-                try SMAppService.mainApp.register()
-            }
-        } catch {
-            log.error("Launch at login change failed")
-            let alert = NSAlert()
-            alert.messageText = "Couldn't change Launch at login"
-            alert.informativeText = "Move Dispaces to the Applications folder and try again. You can also manage it in System Settings › General › Login Items."
-            NSApp.activate()
-            alert.runModal()
-        }
-    }
 
     // MARK: Setup check
 
@@ -205,14 +169,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             break
         }
         bar.redraw()
-    }
-}
-
-/// Carries a tile through a menu item's `representedObject`.
-final class TargetBox: NSObject {
-    let target: TileTarget
-
-    init(_ target: TileTarget) {
-        self.target = target
     }
 }

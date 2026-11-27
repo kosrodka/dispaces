@@ -16,7 +16,7 @@ Terms used below: **Space** means a macOS Space (desktop) on one display. **Logi
 - G2. Clicking a logical tile switches every connected display that has a Space in that logical space to it. The result is the same whichever display's menu bar was clicked.
 - G3. Option-click switches only the display whose menu bar (or fallback bar) was clicked.
 - G4. Dragging a window to another Space moves from Option to Option+Control, and switches only the display under the pointer.
-- G5. The current-state highlight turns orange. It is strong when every display that has the logical space shows it, and pale when only some do.
+- G5. (Revised 26 Nov 2026 by the owner, see section 8.) The current-state highlight turns orange. It was first strong when every display that has the logical space shows it, and pale when only some do.
 - G6. In the Manage window, the connected displays become a grid: one column per logical space, one row per display. Where a display has no Space for a column, the cell reads "Not assigned – <display name>".
 - G7. The first Space rule is fixed by default: the built-in display shows its first Space, external displays don't. The checkbox leaves the window, and the setting moves to the preferences file (section 4.6).
 
@@ -257,3 +257,13 @@ The old `firstSpaces` key is left in the preferences file, unused, like the old 
 
 - **Three displays switching one after another may feel slow.** Mitigation: the back-to-back approach in section 4, as a follow-up.
 - **Renaming a Space moves it between columns.** That is the point, but a typo splits a column. The grid makes this visible, and undo fixes it.
+
+## 8. Revision: colours seen from one display (26 Nov 2026)
+
+The owner asked for colours seen from each display: strong for the number that display shows, pale for numbers only other displays show. After a plain click every display shows the same number, so it is strong everywhere. A display without a Space for the clicked number stays where it is and keeps its own number strong.
+
+macOS shows one picture of the menu bar item on every display (the menu bars are drawn by its `MenuBarAgent` process), so the app can't colour each menu bar differently. The owner chose to follow the display you're working on:
+- **Menu bar:** `LogicalSpaces.Column.highlight(seenFrom:)` with the focused display (the one showing `Snapshot.activeSpaceID`, else the main screen, else the first display). `.here` is strong, `.elsewhere` is pale. Single tiles use `LogicalSpaces.highlight(isCurrent:on:seenFrom:)`.
+- **Manage window:** each row is seen from its own display, and the headings from the focused display.
+- **Unchanged:** VoiceOver labels still say which displays show a logical space (`Column.state`).
+

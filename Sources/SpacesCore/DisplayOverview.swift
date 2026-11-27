@@ -97,11 +97,12 @@ public struct DisplayOverview: Equatable, Sendable {
             let rows = spaces.map { remembered -> Row in
                 for display in snapshot.displays {
                     if let space = display.spaces.first(where: remembered.matches) {
+                        // On screen when the display macOS moved it to shows it.
                         return Row(number: space.numberLabel,
                                    name: Self.spaceName(space, names: names, remembered: remembered),
                                    note: "now on " + displayName(display), spaceID: space.managedID,
-                                   onDisplay: display.identifier, isFullScreen: space.kind == .fullscreen,
-                                   remembered: remembered)
+                                   onDisplay: display.identifier, isCurrent: display.currentSpaceID == space.managedID,
+                                   isFullScreen: space.kind == .fullscreen, remembered: remembered)
                     }
                 }
                 return Row(number: "–", name: names.spaces[remembered.key] ?? remembered.name, note: "not found",

@@ -1,6 +1,7 @@
 import AppKit
 import CGSPrivate
 import os
+import ServiceManagement
 import SpacesCore
 
 let log = Logger(subsystem: "io.github.kosrodka.SpacesBar", category: "app")
@@ -151,6 +152,32 @@ enum AppActivator {
 }
 
 /// Small wrapper for the few System Settings panes the app links to.
+/// Launch at login, through Apple's `SMAppService.mainApp` (also shown, and
+/// switchable, in System Settings › General › Login Items).
+@MainActor
+enum LoginItem {
+    static var isEnabled: Bool { SMAppService.mainApp.status == .enabled }
+
+    /// Turns it on or off; says why in a dialog when macOS refuses.
+    static func set(_ on: Bool) {
+        guard on != isEnabled else { return }
+        do {
+            if on {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            log.error("Launch at login change failed")
+            let alert = NSAlert()
+            alert.messageText = "Couldn't change Launch at login"
+            alert.informativeText = "Move Dispaces to the Applications folder and try again. You can also manage it in System Settings › General › Login Items."
+            NSApp.activate()
+            alert.runModal()
+        }
+    }
+}
+
 enum SettingsLinks {
     static let accessibility = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
     static let keyboard = "x-apple.systempreferences:com.apple.Keyboard-Settings.extension"

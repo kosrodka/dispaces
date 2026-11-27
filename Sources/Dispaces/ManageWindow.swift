@@ -9,6 +9,9 @@ import SpacesCore
 /// has no Space with the column's name. Disconnected displays follow, each as
 /// a bar of its remembered Spaces.
 ///
+/// - A column heading has three rows: the logical space's number, its name, and
+///   "Tile displayed", a field for up to 2 characters the menu bar shows
+///   instead of the number (empty: the number).
 /// - Click a column heading: every display switches. Click a Space: only its
 ///   display switches. Hovering shows the apps, as in the menu bar.
 /// - Double-click (or right-click › Rename) a heading renames every Space in
@@ -20,15 +23,19 @@ import SpacesCore
 ///   display's group; Forget drops a disconnected display. Both change only how
 ///   the app groups Spaces (its own preferences): macOS gives apps no way to
 ///   move a Space to another display, so no window or Space moves.
-/// - Command-Z undoes renames, moves and Forget; Shift-Command-Z redoes them.
+/// - Command-Z undoes renames, tile labels, moves and Forget; Shift-Command-Z redoes them.
+/// - Advanced, at the bottom: the app's on/off settings (floating bar, apps on
+///   hover, Option-Control drag, launch at login), as tick boxes.
 ///
 /// An `AppWindow`: the app shows in the Dock while it's open.
 @MainActor
-final class ManageWindowController: NSObject, NSWindowDelegate {
+final class ManageWindowController: NSObject, NSWindowDelegate, NSTextFieldDelegate {
     /// What the window shows; redrawn only when this changes.
     private struct Shown: Equatable {
         let overview: DisplayOverview
         let logical: LogicalSpaces
+        /// The display you're working on; the headings are coloured as seen from it.
+        let focused: String?
     }
 
     /// An empty grid cell, a drop target for the Spaces of its row.
@@ -56,8 +63,28 @@ final class ManageWindowController: NSObject, NSWindowDelegate {
     /// Connected displays' rows, by display identifier (drop targets for a disconnected display's Space).
     private var connectedBars: [String: ManageBarView] = [:]
     private var placeholders: [Placeholder] = []
+    /// The "Tile displayed" fields, by logical key.
+    private var labelFields: [String: LabelField] = [:]
     private var dragging = false
-    private var reloadAfterDrag = false
+    /// A reload waits while a Space is dragged or a tile label is typed.
+    private var reloadLater = false
+
+    /// An on/off setting in the Advanced section.
+    private struct Setting {
+        let title: String
+        let toolTip: String
+        let isOn: () -> Bool
+        let set: (Bool) -> Void
+    }
+
+    /// The Advanced section's tick boxes, in the order of `settings`.
+    private var settingBoxes: [NSButton] = []
+
+    /// The heading's rows, top to bottom.
+    private static let rowTitles = ["Tile number", "Tile name", "Tile displayed"]
+    private static let numberRowHeight: CGFloat = 16
+    private static let fieldHeight: CGFloat = 22
+    private static let headerGap: CGFloat = 4
 
     init(bar: BarController) {
         self.bar = bar
@@ -70,24 +97,56 @@ final class ManageWindowController: NSObject, NSWindowDelegate {
         self.window = window
         reload(force: true)
         window.present()
+        // Opening the window doesn't start typing in the first field.
+        if isEditingLabel { window.makeFirstResponder(nil) }
+    }
+
+    /// True while a "Tile displayed" field is being typed in.
+    private var isEditingLabel: Bool {
+        labelFields.values.contains { $0.currentEditor() != nil }
     }
 
     /// Refreshes the grid if the window is open and something changed.
     func reload(force: Bool = false) {
         guard let window, force || window.isVisible || window.isMiniaturized else { return }
-        if dragging {
-            reloadAfterDrag = true
+        // Rebuilding would drop a drag, or the field being typed in (and Tab to the next).
+        if dragging || (!force && isEditingLabel) {
+            reloadLater = true
             return
         }
-        let now = Shown(overview: bar.overview(), logical: bar.logical)
+        let now = Shown(overview: bar.overview(), logical: bar.logical, focused: bar.focusedDisplay)
         guard force || now != shown else { return }
         shown = now
         fill(now)
     }
 
     func windowWillClose(_ notification: Notification) {
+        window?.makeFirstResponder(nil)  // keeps a tile label being typed
         window?.undoManager?.removeAllActions()
         AppWindow.closing(window)
+    }
+
+    /// Launch at login can also be changed in System Settings meanwhile.
+    func windowDidBecomeKey(_ notification: Notification) {
+        updateSettingBoxes()
+    }
+
+    /// Leaving the window saves a tile label being typed.
+    func windowDidResignKey(_ notification: Notification) {
+        if isEditingLabel { window?.makeFirstResponder(nil) }
+    }
+
+    /// A reload that waited for typing runs once the focus has left the fields
+    /// (Tab to the next field keeps it waiting).
+    func controlTextDidEndEditing(_ notification: Notification) {
+        guard reloadLater else { return }
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.reloadLater, !self.dragging, !self.isEditingLabel else { return }
+                self.reloadLater = false
+                self.reload()
+            }
+        }
     }
 
     // MARK: Building
@@ -108,6 +167,7 @@ final class ManageWindowController: NSObject, NSWindowDelegate {
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         let document = FlippedView()
+        document.onClick = { [weak window] in window?.makeFirstResponder(nil) }
         document.translatesAutoresizingMaskIntoConstraints = false
         document.addSubview(stack)
         let scroll = NSScrollView()
@@ -121,7 +181,7 @@ final class ManageWindowController: NSObject, NSWindowDelegate {
         hint.font = NSFont.systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
         hint.preferredMaxLayoutWidth = 600
-        hint.maximumNumberOfLines = 3
+        hint.maximumNumberOfLines = 5
         hint.translatesAutoresizingMaskIntoConstraints = false
         hint.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let line = DividerView()
@@ -161,17 +221,27 @@ final class ManageWindowController: NSObject, NSWindowDelegate {
     private func fill(_ shown: Shown) {
         let overview = shown.overview
         let logical = shown.logical
+        if isEditingLabel { window?.makeFirstResponder(nil) }  // keeps what was typed
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         tiles = []
         connectedBars = [:]
         placeholders = []
+        labelFields = [:]
+        settingBoxes = []
 
-        // Every display-name cell has one width, and so does every Space cell.
-        let labelWidth = overview.sections
-            .map { DisplayLabelView(text: $0.name, scale: 1, ghost: !$0.connected).preferredWidth }.max() ?? 0
-        let models = overview.sections.flatMap(\.rows).map(tileModel) + logical.columns.map(headerModel)
-        let tileWidth = models.map { TileView.width(for: $0, compact: false, scale: 1) }.max()
-            ?? Metrics.normalTile.lowerBound
+        // Every display-name cell has one width (wide enough for the heading's
+        // row titles), and so does every Space cell.
+        let titleWidth = Self.rowTitles.map { Self.rowTitle($0).fittingSize.width + 6 }.max() ?? 0
+        let labelWidth = (overview.sections
+            .map { DisplayLabelView(text: $0.name, scale: 1, ghost: !$0.connected).preferredWidth } + [ceil(titleWidth)])
+            .max() ?? 0
+        let cellWidths = overview.sections.flatMap(\.rows).map {
+            TileView.width(for: tileModel($0), compact: false, scale: 1)
+        }
+        let headerWidths = logical.columns.map {
+            TileView.width(for: headerModel($0), compact: false, scale: Metrics.headerScale)
+        }
+        let tileWidth = (cellWidths + headerWidths).max() ?? Metrics.normalTile.lowerBound
 
         let connected = overview.sections.filter(\.connected)
         let disconnected = overview.sections.filter { !$0.connected }
@@ -179,7 +249,7 @@ final class ManageWindowController: NSObject, NSWindowDelegate {
                               uniquingKeysWith: { first, _ in first })
         stack.addArrangedSubview(heading("Connected displays"))
         if !logical.columns.isEmpty {
-            stack.addArrangedSubview(headerRow(logical, names: connected, labelWidth: labelWidth, tileWidth: tileWidth))
+            stack.addArrangedSubview(headerRow(logical, names: overview.sections, labelWidth: labelWidth, tileWidth: tileWidth))
         }
         for section in connected {
             let view = gridRow(section, logical: logical, rows: rows, labelWidth: labelWidth, tileWidth: tileWidth)
@@ -199,17 +269,63 @@ final class ManageWindowController: NSObject, NSWindowDelegate {
             forget.toolTip = "Stop grouping this display's Spaces. Only the app's own memory changes."
             stack.addArrangedSubview(horizontal([barView(section, labelWidth: labelWidth, tileWidth: tileWidth), forget]))
         }
+        if let previous = stack.arrangedSubviews.last { stack.setCustomSpacing(18, after: previous) }
+        stack.addArrangedSubview(heading("Advanced"))
+        for (index, setting) in settings.enumerated() {
+            let box = NSButton(checkboxWithTitle: setting.title, target: self, action: #selector(settingClicked(_:)))
+            box.tag = index
+            box.toolTip = setting.toolTip
+            settingBoxes.append(box)
+            stack.addArrangedSubview(box)
+        }
+        updateSettingBoxes()
 
         var text = "Click a column heading to switch every display; click a Space to switch only its display. "
-            + "Double-click to rename. Drag a Space onto “Not assigned” in its row to give it that column's name."
+            + "Double-click to rename. Drag a Space onto “Not assigned” in its row to give it that column's name. "
+            + "Type a letter in Tile displayed to show it in the menu bar instead of the number."
         if let duplicate = logical.columns.first(where: { $0.duplicateOn != nil }) {
-            text += " " + duplicateNote(duplicate, names: connected)
+            text += " " + duplicateNote(duplicate, names: overview.sections)
         }
         if !disconnected.isEmpty {
             text += " Drag a disconnected display's Space onto the row of the display it's on now to move it there. "
                 + "Only the app's grouping changes; windows stay where they are."
         }
         hint.stringValue = text
+    }
+
+    // MARK: Advanced
+
+    private var settings: [Setting] {
+        let bar = self.bar
+        return [
+            Setting(title: "Floating bar when the menu bar item is hidden",
+                    toolTip: "Whenever macOS hides the menu bar item, a small bar with the same tiles appears at the top of the main display.",
+                    isOn: { bar.showsFallback }, set: { bar.setShowsFallback($0) }),
+            Setting(title: "Show apps on hover",
+                    toolTip: "Rest the pointer on a tile to see its name and the apps with a window on its Space.",
+                    isOn: { bar.showsAppsOnHover }, set: { bar.setShowsAppsOnHover($0) }),
+            Setting(title: "Option-Control-drag windows to Spaces",
+                    toolTip: "Grab a window, then hold Option and Control and drag the pointer onto a tile to take the window to that Space.",
+                    isOn: { bar.dragsWindows }, set: { bar.setDragsWindows($0) }),
+            Setting(title: "Launch at login",
+                    toolTip: "Start Dispaces when you log in. Also in System Settings › General › Login Items.",
+                    isOn: { LoginItem.isEnabled }, set: { LoginItem.set($0) }),
+        ]
+    }
+
+    @objc private func settingClicked(_ sender: NSButton) {
+        let settings = self.settings
+        guard settings.indices.contains(sender.tag) else { return }
+        settings[sender.tag].set(sender.state == .on)
+        // Redrawn: the tiles' tooltips follow Show apps on hover, and the boxes
+        // show what really happened (macOS may refuse Launch at login).
+        reload(force: true)
+    }
+
+    private func updateSettingBoxes() {
+        for (box, setting) in zip(settingBoxes, settings) {
+            box.state = setting.isOn() ? .on : .off
+        }
     }
 
     private func horizontal(_ views: [NSView]) -> NSStackView {
@@ -223,13 +339,26 @@ final class ManageWindowController: NSObject, NSWindowDelegate {
     private func tileModel(_ row: DisplayOverview.Row) -> TileModel {
         let kind = row.isFullScreen ? "Full-screen Space" : (row.spaceID == nil ? "Space" : "Desktop \(row.number)")
         return TileModel(target: .space(row.spaceID ?? 0), number: row.number, name: row.name,
-                         state: row.isCurrent ? .all : .normal, isFullScreen: row.isFullScreen, failed: false,
+                         state: state(of: row), isFullScreen: row.isFullScreen, failed: false,
                          accessibilityLabel: "\(kind), \(row.name)" + (row.note.map { ", " + $0 } ?? ""))
     }
 
+    /// A Space's colour (a disconnected display's, or a full-screen one): strong
+    /// when it's on screen, pale when another Space of its logical space is.
+    private func state(of row: DisplayOverview.Row) -> TileModel.State {
+        guard let id = row.spaceID,
+              let column = shown?.logical.columns.first(where: { $0.cells.contains { $0.space.managedID == id } }),
+              let cell = column.cells.first(where: { $0.space.managedID == id }) else {
+            return row.isCurrent ? .strong : .normal
+        }
+        return TileModel.State(column.highlight(of: cell))
+    }
+
+    /// A column heading's name (its number is in the row above), coloured as
+    /// seen from the display you're working on.
     private func headerModel(_ column: LogicalSpaces.Column) -> TileModel {
-        let state: TileModel.State = column.state == .all ? .all : (column.state == .some ? .some : .normal)
-        return TileModel(target: .logical(column.key), number: String(column.number), name: column.title,
+        let state = TileModel.State(column.highlight(seenFrom: shown?.focused))
+        return TileModel(target: .logical(column.key), number: "", name: column.title,
                          state: state, isFullScreen: false, failed: false,
                          accessibilityLabel: "Logical space \(column.number), \(column.title). Switches every display.")
     }
@@ -240,15 +369,44 @@ final class ManageWindowController: NSObject, NSWindowDelegate {
         return "\(display) has two Spaces named \(column.title); the second one has its own column."
     }
 
-    /// The column headings, lined up with the cells under them.
+    /// The column headings, lined up with the cells under them: three rows
+    /// (number, name, tile displayed), titled where the display names are.
     private func headerRow(_ logical: LogicalSpaces, names: [DisplayOverview.Section], labelWidth: CGFloat,
                            tileWidth: CGFloat) -> NSView {
         let view = NSView()
-        var x = Metrics.inset + Metrics.groupPadding + labelWidth + Metrics.gap
+        let fieldY: CGFloat = 0
+        let nameY = fieldY + Self.fieldHeight + Self.headerGap
+        let numberY = nameY + Metrics.tileHeight + Self.headerGap
+        let height = numberY + Self.numberRowHeight
+        let titleX = Metrics.inset + Metrics.groupPadding
+        for (title, row) in zip(Self.rowTitles, [(numberY, Self.numberRowHeight), (nameY, Metrics.tileHeight),
+                                                 (fieldY, Self.fieldHeight)]) {
+            let label = Self.rowTitle(title)
+            let size = label.fittingSize
+            label.frame = NSRect(x: titleX + 6, y: row.0 + (row.1 - size.height) / 2, width: labelWidth - 6, height: size.height)
+            view.addSubview(label)
+        }
+
+        var x = titleX + labelWidth + Metrics.gap
+        var fields: [LabelField] = []
         for column in logical.columns {
+            let number = NSTextField(labelWithString: String(column.number))
+            number.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+            number.textColor = .secondaryLabelColor
+            number.alignment = .center
+            let numberHeight = number.fittingSize.height
+            number.frame = NSRect(x: x, y: numberY + (Self.numberRowHeight - numberHeight) / 2,
+                                  width: tileWidth, height: numberHeight)
+            view.addSubview(number)
+
+            let field = labelField(column)
+            field.frame = NSRect(x: x, y: fieldY, width: tileWidth, height: Self.fieldHeight)
+            view.addSubview(field)
+            if field.isEnabled { fields.append(field) }
+
             let target = TileTarget.logical(column.key)
-            let tile = TileView(model: headerModel(column), compact: false, scale: 1)
-            tile.frame = NSRect(x: x, y: 0, width: tileWidth, height: Metrics.tileHeight)
+            let tile = TileView(model: headerModel(column), compact: false, scale: Metrics.headerScale)
+            tile.frame = NSRect(x: x, y: nameY, width: tileWidth, height: Metrics.tileHeight)
             tile.renameTitle = "Rename on Every Display…"
             tile.toolTip = column.duplicateOn != nil ? duplicateNote(column, names: names)
                 : (bar.showsAppsOnHover ? nil : "\(column.title): click to switch every display")
@@ -265,10 +423,63 @@ final class ManageWindowController: NSObject, NSWindowDelegate {
             view.addSubview(tile)
             x += tileWidth + Metrics.gap
         }
+        // Tab goes from one field to the next, round to the first.
+        for (field, next) in zip(fields, Array(fields.dropFirst()) + fields.prefix(1)) { field.nextKeyView = next }
         view.translatesAutoresizingMaskIntoConstraints = false
         view.widthAnchor.constraint(equalToConstant: x).isActive = true
-        view.heightAnchor.constraint(equalToConstant: Metrics.tileHeight).isActive = true
+        view.heightAnchor.constraint(equalToConstant: height).isActive = true
         return view
+    }
+
+    private static func rowTitle(_ text: String) -> NSTextField {
+        let field = NSTextField(labelWithString: text)
+        field.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        field.textColor = .secondaryLabelColor
+        return field
+    }
+
+    /// A column's "Tile displayed" field: empty shows the number, greyed.
+    private func labelField(_ column: LogicalSpaces.Column) -> LabelField {
+        let field = LabelField(columnKey: column.labelKey ?? "")
+        field.alignment = .center
+        field.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        field.placeholderString = String(column.number)
+        field.bezelStyle = .roundedBezel
+        field.cell?.isScrollable = true
+        field.setAccessibilityLabel("Tile displayed for \(column.title)")
+        guard let key = column.labelKey else {
+            field.isEnabled = false
+            field.toolTip = "Give this Space a name of its own to choose what its tile shows."
+            return field
+        }
+        field.stringValue = bar.tileLabel(forLogicalKey: key) ?? ""
+        field.toolTip = "Up to \(TileLabel.maxLength) characters the menu bar shows instead of \(column.number). "
+            + "Leave empty to show the number."
+        field.target = self
+        field.action = #selector(labelEdited(_:))
+        field.cell?.sendsActionOnEndEditing = true
+        field.delegate = self
+        labelFields[key] = field
+        return field
+    }
+
+    /// Enter, Tab or leaving the field: stores the tile label (cleaned) if it changed.
+    @objc private func labelEdited(_ sender: NSTextField) {
+        guard let field = sender as? LabelField, !field.columnKey.isEmpty else { return }
+        let typed = TileLabel.sanitize(field.stringValue)
+        if field.stringValue != typed { field.stringValue = typed }
+        guard typed != (bar.tileLabel(forLogicalKey: field.columnKey) ?? "") else { return }
+        applyNames(NameChange(labels: [field.columnKey: typed]), action: "Change Tile Displayed")
+    }
+
+    /// Shows the stored tile labels in the fields, without rebuilding the grid.
+    private func refreshLabelFields() {
+        for (key, field) in labelFields {
+            let stored = bar.tileLabel(forLogicalKey: key) ?? ""
+            guard field.stringValue != stored else { continue }
+            if field.currentEditor() != nil { field.abortEditing() }
+            field.stringValue = stored
+        }
     }
 
     /// A connected display's row: its name, its Space (or "Not assigned") in
@@ -297,7 +508,10 @@ final class ManageWindowController: NSObject, NSWindowDelegate {
             let id = cell.space.managedID
             let name = rows[id]?.name ?? column.title
             let model = TileModel(target: .space(id), number: cell.space.numberLabel, name: name,
-                                  state: cell.isCurrent ? .all : .normal, isFullScreen: false, failed: false,
+                                  // Strong only when this Space is the one on screen (its display may
+                                  // be showing an unplugged display's Space of the same name instead).
+                                  state: TileModel.State(column.highlight(of: cell)),
+                                  isFullScreen: false, failed: false,
                                   accessibilityLabel: "Desktop \(cell.space.numberLabel), \(name), on \(section.name)"
                                       + (cell.isCurrent ? ", current" : ""))
             let tile = spaceTile(model, frame: frame, toolTip: name)
@@ -422,12 +636,18 @@ final class ManageWindowController: NSObject, NSWindowDelegate {
         reload(force: true)
     }
 
-    /// Stores Space names (name key → name) and registers the change for undo;
-    /// undoing stores the previous names the same way, which registers the redo.
-    private func applyNames(_ changes: [String: String]?, action: String) {
-        guard let changes, !changes.isEmpty else { return }
-        let previous = bar.applySpaceNames(changes)
-        reload(force: true)
+    /// Stores Space names and tile labels and registers the change for undo;
+    /// undoing stores the previous ones the same way, which registers the redo.
+    /// A change of tile labels alone updates the fields in place, so typing
+    /// and Tab carry on; anything else redraws the grid.
+    private func applyNames(_ change: NameChange?, action: String) {
+        guard let change, !change.isEmpty else { return }
+        let previous = bar.apply(change)
+        if change.spaces.isEmpty {
+            refreshLabelFields()
+        } else {
+            reload(force: true)
+        }
         guard let undo = window?.undoManager else { return }
         undo.registerUndo(withTarget: self) { target in
             MainActor.assumeIsolated { target.applyNames(previous, action: action) }
@@ -495,6 +715,7 @@ final class ManageWindowController: NSObject, NSWindowDelegate {
     /// hands focus to an app on the new Space, so take it back, once right away
     /// and once after macOS has finished switching.
     private func switchTo(_ target: TileTarget) {
+        if isEditingLabel { window?.makeFirstResponder(nil) }  // saves a tile label being typed first
         bar.click(target, thisDisplayOnly: false) { [weak self] in
             self?.refocus()
             Task { @MainActor [weak self] in
@@ -535,7 +756,7 @@ final class ManageWindowController: NSObject, NSWindowDelegate {
             if isQuick(event) { switchTo(.space(spaceID)) }
         case .dropped(let key?):
             if let title = shown?.logical.column(key: key)?.title {
-                applyNames([nameKey: title], action: "Assign Space")
+                applyNames(NameChange(spaces: [nameKey: title]), action: "Assign Space")
             }
         case .dropped(nil):
             break
@@ -586,8 +807,8 @@ final class ManageWindowController: NSObject, NSWindowDelegate {
             preview?.removeFromSuperview()
             highlight(nil)
             hint.stringValue = hintBefore
-            if reloadAfterDrag {
-                reloadAfterDrag = false
+            if reloadLater {
+                reloadLater = false
                 reload()
             }
         }
@@ -709,7 +930,22 @@ private final class ManageBarView: NSView {
     }
 }
 
-/// Lays the list out from the top.
+/// Lays the list out from the top. A click on the background ends typing in a field.
 private final class FlippedView: NSView {
+    var onClick: (() -> Void)?
     override var isFlipped: Bool { true }
+    override func mouseDown(with event: NSEvent) { onClick?() }
+}
+
+/// A column's "Tile displayed" field, knowing its logical key.
+private final class LabelField: NSTextField {
+    let columnKey: String
+
+    init(columnKey: String) {
+        self.columnKey = columnKey
+        super.init(frame: .zero)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
 }

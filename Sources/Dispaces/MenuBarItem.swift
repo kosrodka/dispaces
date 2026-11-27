@@ -5,12 +5,10 @@ import SpacesCore
 struct TilesContent: Equatable {
     struct Entry: Equatable {
         let tile: TileModel
-        /// An unplugged display's Space that macOS moved onto a connected display.
-        let dimmed: Bool
     }
 
     var entries: [Entry] = []
-    /// How `entries` split into displays (and unplugged displays' groups).
+    /// How `entries` split into groups (logical spaces, full-screen Spaces).
     var runs: [MenuBarGeometry.Run] = []
     /// Show the amber "!" (setup needs attention, or the Space list can't be read).
     var warning = false
@@ -38,8 +36,8 @@ final class SpaceTilesView: NSView {
     /// A tile was clicked; true when only the display under the pointer should switch.
     var onClick: ((TileTarget, _ thisDisplayOnly: Bool) -> Void)?
     var onWarning: (() -> Void)?
-    /// Open the menu; the tile under the pointer, if any, can be renamed from it.
-    var onMenu: ((TileTarget?, NSEvent) -> Void)?
+    /// Open the menu (renaming is only in the Manage window).
+    var onMenu: ((NSEvent) -> Void)?
     /// Pointer entered (true) or left (false) a tile.
     var onHover: ((HoverTile, Bool) -> Void)?
 
@@ -124,9 +122,11 @@ final class SpaceTilesView: NSView {
     }
 
     /// Option-click (without Control, which opens the menu) switches only the
-    /// display under the pointer.
+    /// display under the pointer. Reads the keys held now as well as the event's:
+    /// a menu bar item's click event arrives without Option.
     private static func thisDisplayOnly(_ event: NSEvent) -> Bool {
-        event.modifierFlags.contains(.option) && !event.modifierFlags.contains(.control)
+        MenuBarGeometry.thisDisplayOnly(eventModifiers: UInt64(event.modifierFlags.rawValue),
+                                        liveModifiers: UInt64(NSEvent.modifierFlags.rawValue))
     }
 
     /// The tile under a point in screen coordinates, if this view is on screen and shows one there.
@@ -186,7 +186,7 @@ final class SpaceTilesView: NSView {
         pressStart = nil
         let hit = hit(event)
         if event.type == .rightMouseUp || event.modifierFlags.contains(.control) {
-            onMenu?(target(at: hit), event)
+            onMenu?(event)
             return
         }
         switch hit {
@@ -197,7 +197,7 @@ final class SpaceTilesView: NSView {
         case .gap:
             let x = Double(localPoint(event).x)
             log.notice("Menu bar click between tiles at x \(x, privacy: .public) of \(Double(self.bounds.width), privacy: .public)")
-            onMenu?(nil, event)
+            onMenu?(event)
         }
     }
 
@@ -247,7 +247,7 @@ final class SpaceTilesView: NSView {
         let hit = hit(event)
         if event.modifierFlags.contains(.control) || hit == .gap {
             pressStart = nil
-            onMenu?(target(at: hit), event)
+            onMenu?(event)
         } else {
             pressStart = (event.timestamp, event.locationInWindow)
         }
@@ -273,7 +273,7 @@ final class SpaceTilesView: NSView {
     override func rightMouseDown(with event: NSEvent) {
         setHovered(nil)
         pressStart = nil
-        onMenu?(target(at: hit(event)), event)
+        onMenu?(event)
     }
 
     // MARK: Drawing
@@ -288,9 +288,9 @@ final class SpaceTilesView: NSView {
         }
     }
 
-    /// Strong orange: showing (every display with a Space in the logical space
-    /// shows it, or a single Space is showing). Pale orange with an orange ring:
-    /// only some displays show it. A full-screen Space has a dashed border; a
+    /// Seen from the display you're working on: strong orange when it shows
+    /// this tile's Space, pale orange with an orange ring when only other
+    /// displays show it (the displays differ). A full-screen Space has a dashed border; a
     /// held window over the tile gives a thick ring; a failed switch a red one.
     private func drawTile(_ entry: TilesContent.Entry, in rect: NSRect) {
         let tile = entry.tile
@@ -299,11 +299,11 @@ final class SpaceTilesView: NSView {
         var stroke: NSColor
         var numberColor: NSColor
         switch tile.state {
-        case .all:
+        case .strong:
             fill = Palette.strong
             stroke = Palette.strong
             numberColor = .black
-        case .some:
+        case .pale:
             fill = Palette.pale
             stroke = Palette.strong
             lineWidth = 1.6
@@ -331,17 +331,23 @@ final class SpaceTilesView: NSView {
         if tile.isFullScreen { path.setLineDash([2, 1.5], count: 2, phase: 0) }
 
         NSGraphicsContext.saveGraphicsState()
-        if entry.dimmed && tile.state == .normal && !tile.armed {
-            NSGraphicsContext.current?.cgContext.setAlpha(0.55)
-        }
         path.stroke()
-        let size = (tile.number.count > 1 ? 0.5 : 0.6) * rect.height
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: size, weight: tile.state == .normal ? .medium : .bold),
+        // The number, or the user's tile label (up to 2 characters), made smaller
+        // when it's too wide for the square (e.g. "WM" or two emoji).
+        let text = tile.number as NSString
+        let weight: NSFont.Weight = tile.state == .normal ? .medium : .bold
+        var size = (tile.number.count > 1 ? 0.5 : 0.6) * rect.height
+        var attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: size, weight: weight),
             .foregroundColor: numberColor,
         ]
-        let text = tile.number as NSString
-        let textSize = text.size(withAttributes: attrs)
+        var textSize = text.size(withAttributes: attrs)
+        let room = rect.width - 2 * lineWidth - 1
+        if textSize.width > room, textSize.width > 0 {
+            size = max(size * room / textSize.width, 0.3 * rect.height)
+            attrs[.font] = NSFont.monospacedDigitSystemFont(ofSize: size, weight: weight)
+            textSize = text.size(withAttributes: attrs)
+        }
         text.draw(at: NSPoint(x: rect.midX - textSize.width / 2, y: rect.midY - textSize.height / 2), withAttributes: attrs)
         NSGraphicsContext.restoreGraphicsState()
     }
@@ -442,7 +448,7 @@ final class MenuBarItem: NSObject {
 final class FallbackBar: FloatingPanel {
     static let height: CGFloat = 26
     let tiles = SpaceTilesView(height: FallbackBar.height)
-    private let box = NSView()
+    private let box = PanelBoxView(cornerRadius: 7)
 
     init() {
         super.init(size: NSSize(width: 100, height: Self.height))
@@ -451,9 +457,7 @@ final class FallbackBar: FloatingPanel {
         isMovableByWindowBackground = false
         isExcludedFromWindowsMenu = true
         animationBehavior = .none
-        box.wantsLayer = true
-        box.layer?.cornerRadius = 7
-        box.layer?.borderWidth = 1
+        box.fillAlpha = 0.96
         box.addSubview(tiles)
         contentView = box
         box.setAccessibilityElement(true)
@@ -473,8 +477,6 @@ final class FallbackBar: FloatingPanel {
 
     /// Centred under the menu bar (or at the very top when the menu bar is hidden).
     private func place() {
-        box.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.96).cgColor
-        box.layer?.borderColor = NSColor.separatorColor.cgColor
         let pad: CGFloat = 2
         let size = NSSize(width: tiles.neededWidth + 2 * pad, height: Self.height)
         tiles.frame = NSRect(x: pad, y: 0, width: tiles.neededWidth, height: Self.height)

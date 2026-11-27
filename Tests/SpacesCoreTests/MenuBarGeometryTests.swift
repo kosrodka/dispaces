@@ -80,4 +80,48 @@ final class MenuBarGeometryTests: XCTestCase {
         XCTAssertEqual(MenuBarGeometry.hit(x: 0.5, in: layout, metrics: metrics), .gap)
         XCTAssertEqual(MenuBarGeometry.hit(x: 200, in: layout, metrics: metrics), .gap)
     }
+
+    // MARK: What a click means
+
+    func testOptionClickSwitchesOnlyTheClickedDisplay() {
+        let option = KeyCombo.option, control = KeyCombo.control
+        XCTAssertTrue(MenuBarGeometry.thisDisplayOnly(eventModifiers: option, liveModifiers: option))
+        // macOS drops Option from a status item's click event; the keys held at that moment still count.
+        XCTAssertTrue(MenuBarGeometry.thisDisplayOnly(eventModifiers: 0, liveModifiers: option))
+        XCTAssertTrue(MenuBarGeometry.thisDisplayOnly(eventModifiers: option, liveModifiers: 0))
+        XCTAssertFalse(MenuBarGeometry.thisDisplayOnly(eventModifiers: 0, liveModifiers: 0))
+        XCTAssertFalse(MenuBarGeometry.thisDisplayOnly(eventModifiers: 0, liveModifiers: option | control),
+                       "Control opens the menu instead")
+        XCTAssertFalse(MenuBarGeometry.thisDisplayOnly(eventModifiers: control, liveModifiers: option))
+    }
+
+    // MARK: Apps column placement (screen coordinates, y up)
+
+    func testAppsColumnGoesUnderTheTileWhenItFits() {
+        let place = MenuBarGeometry.appsColumn(height: 300, tileBottom: 950, tileTop: 980,
+                                               visibleBottom: 56, visibleTop: 949, gap: 4)
+        XCTAssertEqual(place.y, 646)
+        XCTAssertEqual(place.height, 300)
+    }
+
+    func testAppsColumnIsCutToTheRoomUnderAMenuBarTileAndScrolls() {
+        let place = MenuBarGeometry.appsColumn(height: 2000, tileBottom: 950, tileTop: 980,
+                                               visibleBottom: 56, visibleTop: 949, gap: 4)
+        XCTAssertEqual(place.y, 56)
+        XCTAssertEqual(place.height, 890)
+    }
+
+    func testAppsColumnGoesOverALowTileWhenOnlyThereItFits() {
+        let place = MenuBarGeometry.appsColumn(height: 300, tileBottom: 200, tileTop: 226,
+                                               visibleBottom: 56, visibleTop: 949, gap: 4)
+        XCTAssertEqual(place.y, 230)
+        XCTAssertEqual(place.height, 300)
+    }
+
+    func testAppsColumnTakesTheSideWithMoreRoomWhenItFitsNeither() {
+        let place = MenuBarGeometry.appsColumn(height: 1000, tileBottom: 400, tileTop: 426,
+                                               visibleBottom: 56, visibleTop: 949, gap: 4)
+        XCTAssertEqual(place.y, 430)
+        XCTAssertEqual(place.height, 519)
+    }
 }

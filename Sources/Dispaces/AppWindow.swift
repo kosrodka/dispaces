@@ -2,8 +2,8 @@ import AppKit
 
 /// The app's normal windows (Manage displays and spaces, User manual). The app
 /// has no main menu, so the window handles the usual shortcuts itself:
-/// Command-W close, Command-M minimise, Command-C copy, Command-A select all,
-/// Command-Z undo and Shift-Command-Z redo.
+/// Command-W close, Command-M minimise, Command-C copy, Command-X cut,
+/// Command-V paste, Command-A select all, Command-Z undo and Shift-Command-Z redo.
 ///
 /// While any of them is open the app shows in the Dock, so a window can be
 /// minimised and found again like any other; it goes back to menu-bar only
@@ -56,6 +56,10 @@ final class AppWindow: NSWindow {
                 return true
             case "c":
                 if NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: self) { return true }
+            case "x":
+                if NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: self) { return true }
+            case "v":
+                if NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: self) { return true }
             case "a":
                 if NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: self) { return true }
             case "z":
