@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "SpacesBar",
+    name: "Dispaces",
     platforms: [.macOS("26.0")],
     targets: [
         // Declarations for the one private, read-only CoreGraphics call we need.
@@ -14,7 +14,7 @@ let package = Package(
         .target(name: "SpacesCore"),
         // The app: AppKit glue.
         .executableTarget(
-            name: "SpacesBar",
+            name: "Dispaces",
             dependencies: ["SpacesCore", "CGSPrivate"],
             linkerSettings: [
                 .linkedFramework("AppKit"),

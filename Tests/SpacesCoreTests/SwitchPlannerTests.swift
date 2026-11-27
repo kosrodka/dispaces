@@ -74,6 +74,67 @@ final class SwitchPlannerTests: XCTestCase {
         }
     }
 
+    // MARK: Logical spaces
+
+    private func cell(_ id: UInt64, current: Bool = false) -> LogicalSpaces.Cell {
+        let found = snap.locate(spaceID: id)!
+        return LogicalSpaces.Cell(display: found.display.identifier, space: found.space, isCurrent: current)
+    }
+
+    func testOrderPutsPointerDisplayLastAndSkipsCurrent() {
+        let cells = [cell(2), cell(4), cell(5, current: true)]
+        XCTAssertEqual(SwitchPlanner.order(cells, pointerDisplay: "aaaa-1111").map(\.space.managedID), [4, 2])
+        XCTAssertEqual(SwitchPlanner.order([cell(3, current: true), cell(4)], pointerDisplay: "AAAA-1111")
+                        .map(\.space.managedID), [4], "nothing to press on a display already there")
+    }
+
+    func testOrderWithoutPointerKeepsDisplayOrder() {
+        XCTAssertEqual(SwitchPlanner.order([cell(2), cell(4)], pointerDisplay: nil).map(\.space.managedID), [2, 4])
+        XCTAssertEqual(SwitchPlanner.order([cell(2), cell(4)], pointerDisplay: "CCCC").map(\.space.managedID), [2, 4])
+    }
+
+    func testOrderFindsThePointerDisplayByWhereTheSpaceIsNow() {
+        // An unplugged display's Space that macOS moved onto A goes last when A was clicked.
+        let moved = LogicalSpaces.Cell(display: "CCCC-3333", space: snap.locate(spaceID: 2)!.space, isCurrent: false,
+                                       onDisplay: "AAAA-1111")
+        XCTAssertEqual(SwitchPlanner.order([moved, cell(4)], pointerDisplay: "AAAA-1111").map(\.space.managedID), [4, 2])
+    }
+
+    func testRefocusPressesOwnShortcutWhenFocusIsElsewhere() {
+        // A shows 3, B shows 5, and B has the focus.
+        let focusedB = SnapshotParser.parse(Fixtures.twoDisplays, activeSpaceID: 5)
+        let table = hotkeys(["120": entry(enabled: true, key: 20, mods: 262144)])
+        XCTAssertEqual(SwitchPlanner.refocusPlan(on: 3, in: focusedB, hotkeys: table),
+                       .pressHotkey(id: 120, combo: KeyCombo(keyCode: 20, modifiers: KeyCombo.control), desktop: 3))
+    }
+
+    func testRefocusDoesNothingWhenNotNeededOrNotPossible() {
+        let focusedA = SnapshotParser.parse(Fixtures.twoDisplays, activeSpaceID: 3)
+        XCTAssertNil(SwitchPlanner.refocusPlan(on: 3, in: focusedA, hotkeys: .defaults), "already focused")
+        let focusedB = SnapshotParser.parse(Fixtures.twoDisplays, activeSpaceID: 5)
+        XCTAssertNil(SwitchPlanner.refocusPlan(on: 2, in: focusedB, hotkeys: .defaults), "not shown on its display")
+        XCTAssertNil(SwitchPlanner.refocusPlan(on: 3, in: snap, hotkeys: .defaults), "focus unknown")
+        let off = hotkeys(["120": entry(enabled: false, key: 20, mods: 262144)])
+        XCTAssertNil(SwitchPlanner.refocusPlan(on: 3, in: focusedB, hotkeys: off), "shortcut off")
+    }
+
+    func testFocusStaysOnClickedDisplayEvenWithoutACell() {
+        // A logical space with a Space only on B, clicked on A's menu bar: focus goes back to A's current Space.
+        let column = LogicalSpaces(snapshot: snap, memory: DisplayMemory(),
+                                   names: Names(storedSpaces: [snap.locate(spaceID: 4)!.space.nameKey: "Music"],
+                                                storedDisplays: nil),
+                                   screenOrder: [], showsFirstSpace: { _ in true })
+            .columns.first { $0.title == "Music" }!
+        XCTAssertEqual(SwitchPlanner.focusTarget(column, pointerDisplay: snap.displays[0]), 3)
+        XCTAssertEqual(SwitchPlanner.focusTarget(column, pointerDisplay: snap.displays[1]), 4, "the clicked display's cell")
+        XCTAssertNil(SwitchPlanner.focusTarget(column, pointerDisplay: nil))
+    }
+
+    func testNoSpaceMessage() {
+        XCTAssertEqual(SwitchPlanner.noSpaceMessage(display: "LC27G7XT", title: "Music"),
+                       "LC27G7XT has no Space named \u{201C}Music\u{201D}.")
+    }
+
     // MARK: Security: only allow-listed shortcuts and modifier bits
 
     func testParserIgnoresNonSpaceShortcuts() {

@@ -1,5 +1,4 @@
 import AppKit
-import ServiceManagement
 import SpacesCore
 
 @MainActor
@@ -8,7 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let monitor = SpaceMonitor()
     private lazy var switcher = SpaceSwitcher(monitor: monitor)
     private lazy var bar = BarController(prefs: prefs, monitor: monitor, switcher: switcher)
-    private var statusItem: NSStatusItem?
+    private let menu = NSMenu()
     private lazy var manageWindow = ManageWindowController(bar: bar)
     private lazy var manualWindow = ManualWindowController()
     /// Connected displays, to notice one being plugged in or unplugged.
@@ -18,14 +17,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let resetDelay: TimeInterval = 1
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        setUpStatusItem()
+        menu.delegate = self
+        bar.onMenu = { [weak self] view in self?.openMenu(under: view) }
         bar.needsAttention = { [weak self] in self?.setupIssues().isEmpty == false }
         bar.onWarningClick = { [weak self] in self?.showSetupCheck() }
         monitor.onRefresh = { [weak self] snapshot in self?.bar.show(snapshot) }
         bar.onChange = { [weak self] in self?.manageWindow.reload() }
         monitor.start()
-        if prefs.barHidden { bar.setVisible(false) }
-        bar.setDragWatching(prefs.dragWindows)
+        bar.setDragWatching(bar.dragsWindows)
         displays = Self.connectedDisplays()
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged),
                                                name: NSApplication.didChangeScreenParametersNotification, object: nil)
@@ -34,7 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Display connected or disconnected
 
-    /// Rebuilds every bar from scratch shortly after a display is connected or
+    /// Redraws the Spaces from scratch shortly after a display is connected or
     /// disconnected (not on resolution or arrangement changes).
     @objc private func screensChanged() {
         let now = Self.connectedDisplays()
@@ -43,7 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         log.notice("Display connected or disconnected")
         resetWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            MainActor.assumeIsolated { self?.bar.resetBars() }
+            MainActor.assumeIsolated { self?.bar.reset() }
         }
         resetWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.resetDelay, execute: work)
@@ -53,26 +52,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Set(NSScreen.screens.compactMap(Screens.identifier(of:)))
     }
 
-    // MARK: Menu bar icon
+    // MARK: Menu
 
-    private func setUpStatusItem() {
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = MenuBarGlyph.make()
-        let menu = NSMenu()
-        menu.delegate = self
-        item.menu = menu
-        statusItem = item
+    /// Opens the menu just under the menu bar (or the floating bar): right-click,
+    /// Control-click, or a click between displays. It has no Rename: renaming
+    /// is only in Manage displays and spaces.
+    ///
+    /// Placed under the bottom of the tiles' window, not of the tiles: beside
+    /// the notch the menu bar is taller than the tiles, so just under the tiles
+    /// is still inside the menu bar, and macOS then hides the menu's first item
+    /// behind a scroll arrow.
+    private func openMenu(under view: NSView) {
+        let left = view.convert(view.bounds, to: nil).minX
+        let point = view.convert(NSPoint(x: left, y: -4), from: nil)
+        _ = menu.popUp(positioning: nil, at: point, in: view)
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        add(menu, "Show bars", #selector(toggleBar), checked: bar.isVisible)
-        add(menu, "Lock all bars", #selector(toggleLock), checked: bar.allLocked)
-        add(menu, "Show apps on hover", #selector(toggleAppsOnHover), checked: bar.showsAppsOnHover)
-        add(menu, "Option-drag windows to Spaces", #selector(toggleDragWindows), checked: prefs.dragWindows)
-        add(menu, "Launch at login", #selector(toggleLogin), checked: SMAppService.mainApp.status == .enabled)
-        menu.addItem(.separator())
+        // First, on its own: the window for renaming and the on/off settings (Advanced).
         add(menu, "Manage displays and spaces", #selector(showManageWindow))
+        menu.addItem(.separator())
         let issues = setupIssues().count
         add(menu, issues == 0 ? "Setup check…" : "Setup check… (\(issues) to fix)", #selector(showSetupCheck))
         add(menu, "Refresh now", #selector(refreshNow))
@@ -89,15 +89,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         add(menu, "Quit Dispaces", #selector(quit), key: "q")
     }
 
-    private func add(_ menu: NSMenu, _ title: String, _ action: Selector, checked: Bool = false, key: String = "") {
+    private func add(_ menu: NSMenu, _ title: String, _ action: Selector, key: String = "") {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
         item.target = self
-        item.state = checked ? .on : .off
         menu.addItem(item)
     }
 
-    @objc private func toggleBar() { bar.setVisible(!bar.isVisible) }
-    @objc private func toggleLock() { bar.setAllLocked(!bar.allLocked) }
     @objc private func refreshNow() { bar.refreshNow() }
     @objc private func showManageWindow() { manageWindow.show() }
     @objc private func showManual() { manualWindow.show() }
@@ -117,30 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate()
         if alert.runModal() == .alertSecondButtonReturn { manualWindow.show() }
     }
-    @objc private func toggleAppsOnHover() { bar.setShowsAppsOnHover(!bar.showsAppsOnHover) }
-
-    @objc private func toggleDragWindows() {
-        prefs.dragWindows.toggle()
-        bar.setDragWatching(prefs.dragWindows)
-    }
     @objc private func quit() { NSApp.terminate(nil) }
-
-    @objc private func toggleLogin() {
-        do {
-            if SMAppService.mainApp.status == .enabled {
-                try SMAppService.mainApp.unregister()
-            } else {
-                try SMAppService.mainApp.register()
-            }
-        } catch {
-            log.error("Launch at login change failed")
-            let alert = NSAlert()
-            alert.messageText = "Couldn't change Launch at login"
-            alert.informativeText = "Move Dispaces to the Applications folder and try again. You can also manage it in System Settings › General › Login Items."
-            NSApp.activate()
-            alert.runModal()
-        }
-    }
 
     // MARK: Setup check
 

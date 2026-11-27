@@ -29,8 +29,8 @@ The keyboard-shortcut method has one more advantage: the app can **read** your s
 | Option | Verdict |
 |---|---|
 | WidgetKit desktop widget | Can't refresh faster than ~every 15 min, can't post keystrokes (sandbox), hidden behind windows. Rejected, see 01-requirements §1.4. |
-| Menu bar only (like Spaceman) | Fine, but the menu bar is crowded and tiles with names don't fit well with notched MacBook displays. Kept as a small icon for the app menu only. |
-| Floating `NSPanel`, AppKit views | **Chosen.** Small, always visible, non-activating (never steals focus), on all Spaces. Plain AppKit views give exact control over single-click vs. double-click vs. right-click, with no SwiftUI tap-gesture delay. |
+| Menu bar status item with small square tiles | **Chosen** (7 Nov 2026, replacing the floating bars at the owner's request). Always where the user looks, takes no desktop space, numbers only so it stays narrow. One `NSStatusItem` whose button holds a self-drawn `SpaceTilesView`; clicks are mapped to tiles by `SpacesCore/MenuBarGeometry`. macOS may hide the item (no room, notch, hidden menu bar), so a fallback panel stands in. |
+| Floating `NSPanel`, AppKit views | Used before 7 Nov 2026 for one bar per display; now only for the fallback bar, the apps column and messages. Non-activating (never steals focus), on all Spaces. |
 
 ### Language, build and dependencies
 
@@ -46,36 +46,38 @@ The keyboard-shortcut method has one more advantage: the app can **read** your s
 ```
 ┌───────────────────────────── Dispaces.app (one process, no network) ────────────────────────────┐
 │                                                                                                   │
-│  AppKit layer (target: SpacesBar)                         Pure logic (target: SpacesCore)         │
+│  AppKit layer (target: Dispaces)                          Pure logic (target: SpacesCore)         │
 │                                                                                                   │
 │  AppDelegate ── owns everything, wires callbacks          Model        Snapshot / Display / Space │
 │     │                                                     SnapshotParser  raw dictionaries → Model│
 │     ├─ SpaceMonitor ── on change ─▶ BarController         NameStore    names, sanitising, JSON    │
 │     │    • NSWorkspace activeSpaceDidChange               Hotkeys      parse symbolichotkeys      │
 │     │    • screen parameters change, wake                 SwitchPlanner Space → keys to press     │
-│     │    • 60 s timer (safety net)                                                                │
+│     │    • 60 s timer (safety net)                        LogicalSpaces names → logical spaces    │
 │     │    └─ SpaceReader ──▶ CGSPrivate (C) ──▶ CGSCopyManagedDisplaySpaces (read-only)            │
 │     │                                                                                             │
-│     ├─ BarController ── one DisplayBar (NSPanel) per display: controls, label, tiles; rename      │
+│     ├─ BarController ── MenuBarItem (NSStatusItem + SpaceTilesView); FallbackBar (NSPanel) when   │
+│     │    the item is off screen; apps column, Option-Control drag, rename                         │
 │     │                                                                                             │
 │     ├─ SpaceSwitcher ── plans with SwitchPlanner, posts CGEvents, verifies, retries once          │
 │     │    └─ KeyPoster ──▶ CGEvent.post(.cghidEventTap)   (needs Accessibility)                    │
 │     │                                                                                             │
-│     ├─ Menu bar icon ── Show bars, Lock all bars, options, Manage window, Setup check, Help, Quit │
+│     ├─ Menu (right-click tiles) ── Rename, options, Manage window, Setup check, Help, Quit        │
 │     ├─ Setup check ── Accessibility granted? shortcuts on? "Displays have separate Spaces" on?    │
-│     └─ Preferences ── UserDefaults (own domain only) via Names and BarLayout validation           │
+│     └─ Preferences ── UserDefaults (own domain only) via Names and DisplayMemory validation        │
 └───────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Why the split:** everything that can be wrong in subtle ways (parsing the private data, numbering desktops, mapping to shortcuts, cleaning names) lives in `SpacesCore`, which uses only Foundation and has unit tests. The AppKit layer is thin glue. Bar geometry (keeping a bar on its display, edge resizing, fitting tiles into a bar) is in `SpacesCore/BarGeometry.swift` for the same reason; the AppKit floating panels (bars, apps column, messages) share one `FloatingPanel` base so they all stay non-activating.
+**Why the split:** everything that can be wrong in subtle ways (parsing the private data, numbering desktops, mapping to shortcuts, cleaning names) lives in `SpacesCore`, which uses only Foundation and has unit tests. The AppKit layer is thin glue. Menu bar geometry (where each square tile goes, which tile a click lands on) is in `SpacesCore/MenuBarGeometry.swift` for the same reason; the AppKit floating panels (fallback bar, apps column, messages) share one `FloatingPanel` base so they all stay non-activating.
 
 ## 2.3 Key flows
 
 **Refresh**
-1. Trigger: Space changed / displays changed / Mac woke / 60 s timer / Refresh button or "Refresh now".
+1. Trigger: Space changed / displays changed / Mac woke / 60 s timer / "Refresh now" in the menu.
 2. `SpaceReader` calls `CGSCopyManagedDisplaySpaces` (< 1 ms).
 3. `SnapshotParser` turns it into a `Snapshot`. Unknown or malformed entries are skipped, never force-unwrapped.
-4. If the snapshot differs from the last one, `BarController` redraws: one bar per display, each placed on its own screen (saved offset from that screen's top-left, clamped to the visible area). Bars for unplugged displays are closed. Otherwise nothing happens.
+4. If the tiles differ from the last ones, `BarController` redraws the menu bar item (and the fallback bar): each display's Spaces as a group, displays left to right as arranged. Otherwise nothing happens.
+5. Every occlusion change of the item's window, and every 2 s, `BarController` checks whether the item is on screen; after 1 s off screen the fallback bar shows, and it hides as soon as the item is back.
 
 **Switch (click on a tile)**
 1. `SwitchPlanner` decides:
@@ -84,11 +86,19 @@ The keyboard-shortcut method has one more advantage: the app can **read** your s
    - Otherwise → don't press anything; explain why.
 2. `KeyPoster` posts the key events with exactly the key code and modifiers stored in your shortcut settings.
 3. `SpaceSwitcher` re-reads the Space list every 50 ms for up to 1 s. Success = that display's current Space is the target.
-4. Not switched → one retry after 300 ms → still not switched → amber outline on the tile and a message with the exact fix.
+4. Not switched → one retry after 300 ms → still not switched → red ring on the tile and a message with the exact fix.
 5. Clicks while a switch is in progress are ignored, so fast clicking can't queue a storm of keystrokes.
 
+**Switch a logical space (click on a numbered tile)**
+1. `LogicalSpaces` (rebuilt on every refresh from the Space names) gives the column: one Space per display at most.
+2. Option-click: only the display under the pointer, as a single switch (above); a message if it has no Space in the column.
+3. Otherwise `SwitchPlanner.order` lists the displays not showing their Space yet, the display under the pointer last.
+4. `SpaceSwitcher.switchAll` switches them one after another, each planned on a fresh read and verified as above; a failure doesn't stop the others.
+5. If the clicked display's Space is showing but doesn't have the focus (`CGSGetActiveSpace`), its own shortcut is pressed once more (`SwitchPlanner.refocusPlan`), so the focus stays where the user clicked.
+6. Any failure: red ring on the tile and a message naming the display and the fix.
+
 **Rename**
-Right-click or double-click → small dialog → name cleaned by `NameStore.sanitize` (trim, max 24 characters, control and text-direction override characters removed) → saved to the app's own preferences → bar redraws.
+Double-click (or right-click › Rename) in the Manage window; the menu bar's menu has no Rename → small dialog → name cleaned by `NameSanitizer.sanitize` (trim, max 24 characters, control and text-direction override characters removed) → saved to the app's own preferences → tiles redraw.
 
 ## 2.4 How names are remembered
 
@@ -97,6 +107,9 @@ Right-click or double-click → small dialog → name cleaned by `NameStore.sani
 | Display | macOS display UUID (`CGDisplayCreateUUIDFromDisplayID`, same value as the Space list's "Display Identifier"); `Main` when Spaces span displays | Reboots, re-plugging, changing ports |
 | Space | The Space's `uuid` from the Space list | Reboots, reordering Spaces |
 | Space whose `uuid` is empty (macOS leaves it empty for the first desktop of a display) | display UUID + position, e.g. `…#1` | Reboots. Moves with position if you reorder |
+| Logical space | Nothing stored: worked out from the Space names on every refresh (same name, ignoring case = same logical space) | As long as the names do |
+| Unplugged display was built-in | `builtIn` in its `displayMemory` record | Reboots |
+| First Space shown | `firstSpaceBuiltIn` (default on) and `firstSpaceExternal` (default off), set only with `defaults write` | Everything |
 
 Deleting a Space in Mission Control leaves its old name unused in preferences; it is ignored. Old entries are capped at 256 so the file can't grow forever.
 

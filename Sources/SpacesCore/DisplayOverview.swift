@@ -76,13 +76,7 @@ public struct DisplayOverview: Equatable, Sendable {
         let shared = snapshot.displays.contains(where: \.spansAllDisplays)
         var sections: [Section] = []
 
-        let order = screenOrder.map { $0.lowercased() }
-        let rank = { (display: Display) in order.firstIndex(of: display.identifier.lowercased()) ?? order.count }
-        let displays = snapshot.displays.enumerated()
-            .sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }
-            .map(\.element)
-
-        for display in displays {
+        for display in LogicalSpaces.orderedDisplays(snapshot, screenOrder: screenOrder) {
             let hidden = showsFirstSpace(display.identifier) ? nil : display.spaces.first?.managedID
             let rows = display.spaces
                 .filter { $0.managedID != hidden }
@@ -103,11 +97,12 @@ public struct DisplayOverview: Equatable, Sendable {
             let rows = spaces.map { remembered -> Row in
                 for display in snapshot.displays {
                     if let space = display.spaces.first(where: remembered.matches) {
+                        // On screen when the display macOS moved it to shows it.
                         return Row(number: space.numberLabel,
                                    name: Self.spaceName(space, names: names, remembered: remembered),
                                    note: "now on " + displayName(display), spaceID: space.managedID,
-                                   onDisplay: display.identifier, isFullScreen: space.kind == .fullscreen,
-                                   remembered: remembered)
+                                   onDisplay: display.identifier, isCurrent: display.currentSpaceID == space.managedID,
+                                   isFullScreen: space.kind == .fullscreen, remembered: remembered)
                     }
                 }
                 return Row(number: "–", name: names.spaces[remembered.key] ?? remembered.name, note: "not found",
